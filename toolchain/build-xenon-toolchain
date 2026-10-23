@@ -7,25 +7,16 @@ TARGET=xenon
 PREFIX="${PREFIX:-/usr/local/xenon}" # Install location of your final toolchain.
 PARALLEL=${PARALLEL:--j$(nproc --all)}
 
-# TEMPORARY: Use mirrors for GNU/Savannah projects due to upstream technical issues
-# TODO: sig/sha256 verify when downloading from mirrors
-
-# BINUTILS_DL="https://ftp.gnu.org/gnu/binutils/binutils-2.32.tar.gz"
-BINUTILS_DL="https://mirror.netcologne.de/gnu/binutils/binutils-2.32.tar.gz"
-# GCC_DL="https://ftp.gnu.org/gnu/gcc/gcc-16.2.0/gcc-16.2.0.tar.gz"
-GCC_DL="https://mirror.netcologne.de/gnu/gcc/gcc-16.2.0/gcc-16.2.0.tar.gz"
-NEWLIB_DL="https://sourceware.org/pub/newlib/newlib-3.1.0.tar.gz"
+BINU_VER="2.32"
+GCC_VER="16.2.0"
+NEWL_VER="3.1.0"
+GCC_EXTRA_CFG=""
 
 ZLIB_DL="https://zlib.net/fossils/zlib-1.2.11.tar.gz"
 LIBPNG_DL="https://download.sourceforge.net/libpng/libpng-1.5.30.tar.xz"
 BZIP2_DL="https://sourceware.org/pub/bzip2/bzip2-1.0.6.tar.gz"
 # FREETYPE_DL="https://download.savannah.gnu.org/releases/freetype/freetype-2.10.4.tar.gz"
 FREETYPE_DL="https://mirror.netcologne.de/savannah/freetype/freetype-2.10.4.tar.gz"
-
-
-BINUTILS=$(basename $BINUTILS_DL .tar.gz)
-GCC=$(basename $GCC_DL .tar.gz)
-NEWLIB=$(basename $NEWLIB_DL .tar.gz)
 
 ZLIB=$(basename $ZLIB_DL .tar.gz)
 LIBPNG=$(basename $LIBPNG_DL .tar.xz)
@@ -48,7 +39,9 @@ cd "$(dirname "$0")"
 #FSBRANCH=Swizzy
 
 # path to the logfile
-LOGFILE=build.log
+LOGFILE="$PWD/build.log"
+
+shopt -s extglob
 
 # temp variables export, same as xenon-env cmd does
 export DEVKITXENON="$PREFIX"
@@ -68,7 +61,7 @@ check_priv()
         fi
 
         rm -f "$PREFIX"/check_priv
-    fi    
+    fi
 }
 
 fail_with_info()
@@ -77,14 +70,15 @@ fail_with_info()
     exit 1
 }
 
+
 # to compile and install libxenon
 libxenon_install()
 {
     check_priv "$@"
     echo -e "Building libxenon..."
-    make -C ../libxenon/ports/xenon clean 2>&1 >> $LOGFILE || fail_with_info
-    make $PARALLEL -C ../libxenon/ports/xenon libxenon.a 2>&1 >> $LOGFILE || fail_with_info
-    make -C ../libxenon/ports/xenon install 2>&1 >> $LOGFILE || fail_with_info
+    make -C ../libxenon/ports/xenon clean >> $LOGFILE 2>&1 || fail_with_info
+    make $PARALLEL -C ../libxenon/ports/xenon libxenon.a >> $LOGFILE 2>&1 || fail_with_info
+    make -C ../libxenon/ports/xenon install >> $LOGFILE 2>&1 || fail_with_info
     echo
     echo -e "libxenon installed successfully"
     echo
@@ -92,22 +86,33 @@ libxenon_install()
 
 toolchain_install()
 {
+    # TEMPORARY: Use mirrors for GNU/Savannah projects due to upstream technical issues
+    # TODO: sig/sha256 verify when downloading from mirrors
+
+    # BINUTILS_DL="https://ftp.gnu.org/gnu/binutils/binutils-${BINU_VER}.tar.gz"
+    BINUTILS_DL="https://mirror.netcologne.de/gnu/binutils/binutils-${BINU_VER}.tar.gz"
+    # GCC_DL="https://ftp.gnu.org/gnu/gcc/gcc-${GCC_VER}/gcc-${GCC_VER}.tar.gz"
+    GCC_DL="https://mirror.netcologne.de/gnu/gcc/gcc-${GCC_VER}/gcc-${GCC_VER}.tar.gz"
+    NEWLIB_DL="https://sourceware.org/pub/newlib/newlib-${NEWL_VER}.tar.gz"
+
+    BINUTILS=$(basename $BINUTILS_DL .tar.gz)
+    GCC=$(basename $GCC_DL .tar.gz)
+    NEWLIB=$(basename $NEWLIB_DL .tar.gz)
+
     check_priv "$@"
     chown -R `whoami`:`whoami` "$PREFIX"
 
-    # Check if binutils sources are available, download it if needed
+    # Check if sources are available, download if needed
     if [ ! -f $BINUTILS.tar.gz ]; then
             echo -e "Downloading $BINUTILS"
             wget -c $BINUTILS_DL || fail_with_info
     fi
 
-    # Check if gcc sources are available, download it if needed
     if [ ! -f $GCC.tar.gz ]; then
             echo -e "Downloading $GCC"
             wget -c $GCC_DL || fail_with_info
     fi
 
-    # Check if newlib sources are available, download it if needed
     if [ ! -f $NEWLIB.tar.gz ]; then
             echo -e "Downloading $NEWLIB"
             wget -c $NEWLIB_DL || fail_with_info
@@ -117,66 +122,100 @@ toolchain_install()
     mkdir build
 
     if $BUILD_BINUTILS; then
-        if [ ! -d $BINUTILS ]; then
-            mkdir $BINUTILS
-            echo -e "Extracting $BINUTILS..."
-            $EXTR $BINUTILS.tar.gz | tar xfz - >> $LOGFILE 2>&1 || fail_with_info
-            cat $BINUTILS.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
+        rm -rf $BINUTILS
+        mkdir $BINUTILS
+        echo -e "Extracting $BINUTILS..."
+        $EXTR $BINUTILS.tar.gz | tar xfz - >> $LOGFILE 2>&1 || fail_with_info
 
+        cat $BINUTILS.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
+
+        if [ "$VMX_MODE" == "vmx128" ]; then
             if [ -f $BINUTILS-vmx128.diff ]; then
                 echo -e "Applying vmx128 support..."
                 cat $BINUTILS-vmx128.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
+            else
+                echo -e "No vmx128 diff found for binutils version $BINU_VER."
+                exit 1
             fi
         fi
+
         cd build
         echo -e "Configuring $BINUTILS..."
-        ../$BINUTILS/configure --target=$TARGET --prefix="$PREFIX"  --enable-multilib --disable-nls --disable-werror >> $LOGFILE 2>&1 || fail_with_info
+        case "${BINU_VER}" in
+            2.39 | 2.4*) # 2.39+
+                ../$BINUTILS/configure --target=$TARGET --prefix="$PREFIX" \
+                --disable-werror --enable-multilib --disable-nls  \
+                --enable-default-execstack=no  --enable-warn-execstack=no \
+                --enable-warn-rwx-segments=no >> $LOGFILE 2>&1 || fail_with_info
+                ;;
+            *)
+                ../$BINUTILS/configure --target=$TARGET --prefix="$PREFIX" \
+                --disable-werror --enable-multilib --disable-nls \
+                >> $LOGFILE 2>&1 || fail_with_info
+                ;;
+        esac
         echo -e "Building $BINUTILS, this could take a while..."
-        make $PARALLEL 2>&1 >> $LOGFILE || fail_with_info
+        make $PARALLEL >> $LOGFILE 2>&1 || fail_with_info
         echo -e "Installing $BINUTILS..."
-        make install 2>&1 >> $LOGFILE || fail_with_info
+        make install >> $LOGFILE 2>&1 || fail_with_info
         cd ..
         rm -rf build/*
         echo -e "Done"
     fi
 
     if $BUILD_GCC; then
-        if [ ! -d $GCC ]; then
+        rm -rf $GCC
         mkdir $GCC
         echo -e "Extracting $GCC..."
         $EXTR $GCC.tar.gz | tar xfz - >> $LOGFILE 2>&1 || fail_with_info
+
         cat $GCC.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
+
+        if [ "$VMX_MODE" == "vmx128" ]; then
+            if [ -f $GCC-vmx128.diff ]; then
+                echo -e "Applying vmx128 support..."
+                cat $GCC-vmx128.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
+            else
+                echo -e "No vmx128 diff found for gcc version $GCC_VER."
+                exit 1
+            fi
         fi
+
         cd build
         echo -e "Configuring $GCC..."
         ../$GCC/configure --target=$TARGET --prefix="$PREFIX" --with-libiconv-prefix=/opt/local -enable-interwork \
             --enable-languages="c" --without-headers --disable-shared \
             --with-newlib --disable-libmudflap --disable-libssp --disable-nls --disable-shared --without-headers \
             --disable-decimal-float --enable-altivec \
-            --with-gmp=/opt/local --with-mpfr=/opt/local --with-cpu=cell >> $LOGFILE 2>&1 || fail_with_info
+            $GCC_EXTRA_CFG --with-gmp=/opt/local --with-mpfr=/opt/local --with-cpu=cell >> $LOGFILE 2>&1 || fail_with_info
         echo -e "Building $GCC, this could take a while..."
-        make $PARALLEL all-gcc 2>&1 >> $LOGFILE || fail_with_info
+        make $PARALLEL MAKEINFO=true all-gcc >> $LOGFILE 2>&1 || fail_with_info
         echo -e "Installing $GCC..."
-        make install-gcc 2>&1 >> $LOGFILE || fail_with_info
+        make MAKEINFO=true install-gcc >> $LOGFILE 2>&1 || fail_with_info
         cd ..
         rm -rf build/*
         echo -e "Done"
     fi
 
     if $BUILD_NEWLIB; then
+        rm -rf $NEWLIB
         mkdir -p $NEWLIB
         echo -e "Extracting $NEWLIB..."
         $EXTR $NEWLIB.tar.gz | tar xfz - >> $LOGFILE 2>&1 || fail_with_info
+
         cat $NEWLIB.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
+
+        mkdir -p "$PREFIX/$TARGET/include" "$PREFIX/$TARGET/sys-include" || fail_with_info
+
         cd build
         echo -e "Configuring $NEWLIB..."
         ../$NEWLIB/configure --target=$TARGET --prefix="$PREFIX"  --enable-multilib --disable-nls \
             CFLAGS="-DHAVE_BLKSIZE -O2" \
             --enable-newlib-io-long-long --enable-newlib-io-long-double >> $LOGFILE 2>&1 || fail_with_info
         echo -e "Building $NEWLIB, this could take a while..."
-        make $PARALLEL 2>&1 >> $LOGFILE || fail_with_info
+        make $PARALLEL >> $LOGFILE 2>&1 || fail_with_info
         echo -e "Installing $NEWLIB..."
-        make install 2>&1 >> $LOGFILE || fail_with_info
+        make install >> $LOGFILE 2>&1 || fail_with_info
         cd ..
         #rm -rf build/*
         echo -e "Done"
@@ -188,14 +227,14 @@ toolchain_install()
         echo -e "Configuring $GCC (2nd pass)..."
         unset LIBRARY_PATH
         ../$GCC/configure --target=$TARGET --prefix="$PREFIX" --with-libiconv-prefix=/opt/local --with-cpu=cell \
-            --with-gmp=/opt/local --with-mpfr=/opt/local --disable-decimal-float --disable-libquadmath \
+            $GCC_EXTRA_CFG --with-gmp=/opt/local --with-mpfr=/opt/local --disable-decimal-float --disable-libquadmath \
             --enable-languages=c,c++ --disable-libssp --disable-libsanitizer --with-newlib --enable-cxx-flags="-G0" \
             --disable-libmudflap --disable-nls --disable-shared --disable-linux-futex --enable-altivec \
             --disable-libatomic --disable-threads --disable-libgomp --disable-libitm --disable-libstdcxx-time --disable-initfini-array -v >> $LOGFILE 2>&1 || fail_with_info
         echo -e "Building $GCC - (2nd pass), this could take a while..."
-        make $PARALLEL 2>&1 >> $LOGFILE || fail_with_info
+        make $PARALLEL MAKEINFO=true >> $LOGFILE 2>&1 || fail_with_info
         echo -e "Installing $GCC (2nd pass)..."
-        make install 2>&1 >> $LOGFILE || fail_with_info
+        make MAKEINFO=true install >> $LOGFILE 2>&1 || fail_with_info
         cd ..
         rm -rf build/*
         echo -e "Done"
@@ -221,11 +260,11 @@ zlib_install()
     export TARGET_SAVE=$TARGET
     export CC=$TARGET-gcc
     export CFLAGS="-mcpu=cell -mtune=cell -m32 -fno-pic -mpowerpc64 -Wno-error -L$DEVKITXENON/xenon/lib/32/ -T$DEVKITXENON/app.lds -u read -u _start -u exc_base -L$DEVKITXENON/usr/lib -I$DEVKITXENON/usr/include"
-    export LDFLAGS="$CFLAGS"
+    export LDFLAGS="${CFLAGS//-T$DEVKITXENON\/app.lds/}" # avoid duplicate -T
     export TARGET=`gcc -v 2>&1 | sed -n '2p' | awk '{print $2}'`
 
     echo -e "Configuring $ZLIB..."
-    ./configure --prefix=$DEVKITXENON/usr >> $LOGFILE 2>&1 || fail_with_info
+    ./configure --static --prefix=$DEVKITXENON/usr >> $LOGFILE 2>&1 || fail_with_info
 
     sed '/cp $(SHAREDLIBV) $(DESTDIR)$(sharedlibdir)/d' Makefile > Makefile.xenon
 
@@ -260,15 +299,15 @@ libpng_install()
 
     export CC=$TARGET-gcc
     export CFLAGS="-mcpu=cell -mtune=cell -m32 -fno-pic -mpowerpc64 $DEVKITXENON/usr/lib/libxenon.a -L$DEVKITXENON/xenon/lib/32 -T$DEVKITXENON/app.lds -u read -u _start -u exc_base -L$DEVKITXENON/usr/lib -I$DEVKITXENON/usr/include"
-    export LDFLAGS="$CFLAGS"
+    export LDFLAGS="${CFLAGS//-T$DEVKITXENON\/app.lds/}"
 
     echo -e "Configuring $LIBPNG..."
     ./configure --disable-shared --enable-static --prefix=$DEVKITXENON/usr --host=ppc-elf >> $LOGFILE 2>&1 || fail_with_info
 
     echo -e "Building $LIBPNG..."
-    make $PARALLEL CROSS_COMPILE=$TARGET- >> $LOGFILE 2>&1 || fail_with_info
-    echo -e "Installing $LIBPNG..."	
-    make CROSS_COMPILE=$TARGET- install >> $LOGFILE 2>&1 || fail_with_info
+    make $PARALLEL CROSS_COMPILE=$TARGET- CFLAGS="${CFLAGS//$DEVKITXENON\/usr\/lib\/libxenon.a/}" LDFLAGS="${LDFLAGS//$DEVKITXENON\/usr\/lib\/libxenon.a/}" check_PROGRAMS= >> $LOGFILE 2>&1 || fail_with_info
+    echo -e "Installing $LIBPNG..."
+    make CROSS_COMPILE=$TARGET- CFLAGS="${CFLAGS//$DEVKITXENON\/usr\/lib\/libxenon.a/}" LDFLAGS="${LDFLAGS//$DEVKITXENON\/usr\/lib\/libxenon.a/}" check_PROGRAMS= install >> $LOGFILE 2>&1 || fail_with_info
     cd ..
     rm -rf $LIBPNG
 
@@ -296,7 +335,7 @@ bzip2_install()
     echo -e "Building $BZIP2..."
     make $PARALLEL >> $LOGFILE 2>&1 || fail_with_info
     echo -e "Installing $BZIP2..."
-    make install >> $LOGFILE 2>&1 || fail_with_info
+    make install PREFIX=$DEVKITXENON/usr >> $LOGFILE 2>&1 || fail_with_info
     cd ..
     rm -rf $BZIP2
     echo -e "Done"
@@ -310,7 +349,7 @@ freetype_install()
         echo -e "Downloading $FREETYPE..."
         wget -c $FREETYPE_DL || fail_with_info
     fi
-    
+
     echo -e "Extracting $FREETYPE..."
     rm -rf $FREETYPE
     tar xzf $FREETYPE.tar.gz >> $LOGFILE 2>&1 || fail_with_info
@@ -318,15 +357,15 @@ freetype_install()
 
     export CC=$TARGET-gcc
     export CFLAGS="-mcpu=cell -mtune=cell -m32 -fno-pic -mpowerpc64 $DEVKITXENON/usr/lib/libxenon.a -L$DEVKITXENON/xenon/lib/32/ -T$DEVKITXENON/app.lds -u read -u _start -u exc_base -L$DEVKITXENON/usr/lib -I$DEVKITXENON/usr/include"
-    export LDFLAGS="$CFLAGS"
+    export LDFLAGS="${CFLAGS//-T$DEVKITXENON\/app.lds/}"
 
     echo -e "Configuring $FREETYPE..."
-    ./configure --prefix=$DEVKITXENON/usr --host=ppc-elf --disable-shared --without-brotli >> $LOGFILE 2>&1 || fail_with_info
+    PKG_CONFIG_LIBDIR=$DEVKITXENON/usr/lib/pkgconfig PKG_CONFIG_PATH= ./configure --prefix=$DEVKITXENON/usr --host=ppc-elf --disable-shared --without-brotli --without-harfbuzz >> $LOGFILE 2>&1 || fail_with_info
 
     echo -e "Building $FREETYPE..."
-    make $PARALLEL CROSS_COMPILE=$TARGET- >> $LOGFILE 2>&1 || fail_with_info
+    make $PARALLEL CROSS_COMPILE=$TARGET- LDFLAGS="${LDFLAGS//$DEVKITXENON\/usr\/lib\/libxenon.a/}" >> $LOGFILE 2>&1 || fail_with_info
     echo -e "Installing $FREETYPE..."
-    make CROSS_COMPILE=$TARGET- install >> $LOGFILE 2>&1 || fail_with_info
+    make CROSS_COMPILE=$TARGET- LDFLAGS="${LDFLAGS//$DEVKITXENON\/usr\/lib\/libxenon.a/}" install >> $LOGFILE 2>&1 || fail_with_info
     cd ..
     rm -rf $FREETYPE
 
@@ -342,7 +381,7 @@ filesystems_install()
     check_priv "$@"
     echo -e "Building Filesystems..."
 
-    filesystems="fat-xenon ext2fs-xenon xtaflib" # ntfs-xenon ext2fs-xenon xtaflib
+    filesystems="libfat libext2fs libxtaf" # ntfs-xenon ext2fs-xenon xtaflib
 
     for i in $filesystems
     do
@@ -354,12 +393,12 @@ filesystems_install()
                 cd $i
                 git checkout $FSBRANCH >> $LOGFILE 2>&1
                 cd ..
-            fi			
+            fi
         else
             cd $i
             if [ "" != "$FSBRANCH" ]; then
                 git checkout $FSBRANCH >> $LOGFILE 2>&1
-            fi	
+            fi
             git remote update >> $LOGFILE 2>&1
             git status -uno | grep -q behind
             if [ 0 -eq $? ]; then
@@ -404,15 +443,15 @@ cube()
         cp ../devkitxenon/examples/xenon/graphics/cube/cube.elf32 .
         echo
         echo -e "cube.elf32 compiled, run it via xell"
-        echo		
-        
+        echo
+
     else
         echo
         echo -e "git is needed to download libxenon, install it and run this script again with \"libxenon\" as argument"
         echo -e "If you are running debian/ubuntu : apt install git"
         echo
     fi
-    exit 0	
+    exit 0
 }
 
 all_done()
@@ -426,7 +465,7 @@ all_done()
     echo -e "${RED}Please add the following path to your login script (~/.bashrc) if you'd like every shell to have access by default:"
     echo
     echo -e "export DEVKITXENON=\"$PREFIX"\"
-    echo -e 'export PATH="${PATH:+${PATH}:}"$DEVKITXENON"/bin:"$DEVKITXENON"/usr/bin"'
+    echo     -e 'export PATH="${PATH:+${PATH}:}"$DEVKITXENON"/bin:"$DEVKITXENON"/usr/bin"'
     echo 
     echo -e "Alternatively, run "$0" env-cmd to install a command named xenon-env to /usr/local/bin/xenon-env to set those in the current shell for you"
     echo -e "${NC}"
@@ -435,10 +474,10 @@ all_done()
 # start
 rm -f $LOGFILE
 
-if [ "$1" == "toolchain" ]; then
-
+if [ "$1" == "all" ] || [ "$1" == "toolchain" ]; then
     if [ "$FREE60_DOCKER_BUILD" = "true" ]; then
         echo "Info: running in Docker, not installing dependencies."
+    # Debian / Ubuntu etc
     elif command -v apt &> /dev/null; then
         echo "Info: apt has been detected. Root privileges are required to install dependencies."
         pkgs="build-essential flex bison libgmp-dev libmpfr-dev libmpc-dev texinfo git wget"
@@ -449,19 +488,96 @@ if [ "$1" == "toolchain" ]; then
             echo "Failed to install required packages!"
             exit 1
         }
+    # Fedora
     elif command -v dnf &> /dev/null; then
         echo "Info: dnf has been detected. Root privileges are required to install dependencies."
         sudo dnf -y install gcc g++ flex bison glibc-devel.i686 libstdc++-devel.i686 gmp-devel mpfr-devel libmpc-devel texinfo git wget || {
             echo "Failed to install required packages!"
             exit 1
         }
+    # Arch
+    elif command -v pacman &> /dev/null; then
+        # Forbid cygwin and allow arch
+        case  "$(uname -s)" in
+            CYGWIN*)
+                echo "Info: a package manager was not detected. Ensure that the required dependencies have been installed."
+                ;;
+            Linux*)
+                echo "Info: pacman has been detected. Please ensure multilib is enabled. Root privileges are required to install dependencies."
+                # Would it work fine on arm?
+                if [ "$(uname -m)" != "x86_64" ]; then
+                    echo "Info: a package manager was not detected. Ensure that the required dependencies have been installed."
+                fi
+                sudo pacman -S --needed --noconfirm gcc gcc-multilib flex bison lib32-glibc gmp mpfr libmpc texinfo git wget || {
+                    echo "Failed to install required packages!"
+                    exit 1
+                }
+                ;;
+            *)
+                echo "Info: a package manager was not detected. Ensure that the required dependencies have been installed."
+                ;;
+        esac
     else
         echo "Info: a package manager was not detected. Ensure that the required dependencies have been installed."
     fi
-    
+
+    # available [version] packs
+    case "$2" in
+        16.2.0*)
+            BINU_VER="2.32"
+            GCC_VER="16.2.0"
+            NEWL_VER="3.1.0"
+            ;;
+        9.2.0*)
+            BINU_VER="2.32"
+            GCC_VER="9.2.0"
+            NEWL_VER="3.1.0"
+            ;;
+        6.3.0*)
+            BINU_VER="2.28"
+            GCC_VER="6.3.0"
+            GCC_EXTRA_CFG="--without-isl" # gcc 6 graphite is incompatible with modern isl
+            export CXXFLAGS="-O2 -g -std=gnu++14 -fpermissive" # gcc 6 sources vs modern host g++
+            NEWL_VER="2.5.0"
+            ;;
+        6.3.0-vmx128*)
+            BINU_VER="2.28"
+            GCC_VER="6.3.0"
+            GCC_EXTRA_CFG="--without-isl"
+            export CXXFLAGS="-O2 -g -std=gnu++14 -fpermissive"
+            NEWL_VER="2.5.0"
+            VMX_MODE="vmx128"
+            ;;
+        #4.7.1*) Disabled as libxenon does not build
+        #    BINU_VER="2.22"
+        #    GCC_VER="4.7.1"
+        #    export CFLAGS="-O0 -g0 -std=gnu99 -fno-strict-aliasing -fno-delete-null-pointer-checks -fcommon -fgnu89-inline"
+        #    export CFLAGS_FOR_BUILD="-O0 -g0 -std=gnu99 -fno-strict-aliasing -fno-delete-null-pointer-checks -fcommon -fgnu89-inline" # gcc 4.7 vs C23-default host gcc
+        #    NEWL_VER="1.20.0"
+        #    ;;
+        *) # default
+            BINU_VER="2.32"
+            GCC_VER="16.2.0"
+            NEWL_VER="3.1.0"
+            ;;
+    esac
+
     toolchain_install "$0" "$@"
+
+    if [ "$1" == "all" ]; then
+        libxenon_install "$0" "$@"
+        zlib_install "$0" "$@"
+        bzip2_install "$0" "$@"
+        libpng_install "$0" "$@"
+        freetype_install "$0" "$@"
+        bin2s_install "$0" "$@"
+        filesystems_install "$0" "$@"
+    fi
+
     all_done
 elif [ "$1" == "libs" ]; then
+    # libxenon provides app.lds and libxenon.a, needed to link-test the libs below
+    libxenon_install "$0" "$@"
     zlib_install "$0" "$@"
     bzip2_install "$0" "$@"
     libpng_install "$0" "$@"
@@ -486,9 +602,9 @@ elif [ "$1" == "cube" ]; then
     cube
 elif [ "$1" == "clean" ]; then
     check_priv "$0" "$@"
-    rm -rf $GCC $GCC.tar.gz
-    rm -rf $BINUTILS $BINUTILS.tar.gz
-    rm -rf $NEWLIB $NEWLIB.tar.gz
+    rm -rf gcc-*.tar.gz gcc-!(*.diff|*.patch)
+    rm -rf binutils-*.tar.gz binutils-!(*.diff|*.patch)
+    rm -rf newlib-*.tar.gz newlib-!(*.diff|*.patch)
     rm -rf $ZLIB $ZLIB.tar.gz
     rm -rf $LIBPNG $LIBPNG.tar.xz
     rm -rf $BZIP2 $BZIP2.tar.gz
@@ -497,6 +613,7 @@ elif [ "$1" == "clean" ]; then
     rm -rf ext2fs-xenon
     rm -rf fat-xenon
     rm -rf xtaflib
+    rm -f cube_normal.elf
     make -C ../devkitxenon/examples/xenon/graphics/cube clean
 elif [ "$1" == "env-cmd" ]; then
     check_priv "$0" "$@"
@@ -505,17 +622,30 @@ elif [ "$1" == "env-cmd" ]; then
     echo "Run the xenon-env command to add libxenon to your curent shell PATH."
 else
     echo -e "Usage:"
-    echo -e "\"$0 toolchain\" (install toolchain)"
-    echo -e "\"$0 libs\" (install libxenon + bin2s + libraries seen below)"
-    echo -e "\"$0 libxenon\" (install or update libxenon)"
-    echo -e "\"$0 zlib\" (install or update zlib)"
-    echo -e "\"$0 libpng\" (install or update libpng)"
-    echo -e "\"$0 bzip2\" (install or update bzip2)"
-    echo -e "\"$0 freetype\" (install or update freetype)"
-    echo -e "\"$0 filesystems\" (install libxenon filesystems)"
-    echo -e "\"$0 cube\" (compile the cube sample)"
-    echo -e "\"$0 env-cmd\" (install a command to set env vars named xenon-env to /usr/local/bin)"
-    echo -e "\"$0 clean\" (delete all downloaded files)"
+    echo -e "$0 <subcommand>"
+    echo
+    echo -e "Subcommands:"
+    echo -e "\"all\"       [version] - (toolchain, libs, and filesystems)" 
+    echo -e "\"toolchain\" [version] - (install toolchain)"
+    echo -e "\"libs\"                - (install libxenon + bin2s + libraries seen below)"
+    echo -e "\"libxenon\"            - (install or update libxenon)"
+    echo -e "\"zlib\"                - (install or update zlib)"
+    echo -e "\"libpng\"              - (install or update libpng)"
+    echo -e "\"bzip2\"               - (install or update bzip2)"
+    echo -e "\"freetype\"            - (install or update freetype)"
+    echo -e "\"filesystems\"         - (install libxenon filesystems)"
+    echo -e "\"cube\"                - (compile the cube sample)"
+    echo -e "\"env-cmd\"             - (install a command to set env vars named xenon-env to /usr/local/bin)"
+    echo -e "\"clean\"               - (delete all downloaded files)"
+    echo
+    echo -e "Versions:"
+    echo -e "16.2.0 (Default)"
+    echo -e "9.2.0"
+    echo -e "6.3.0-vmx128"
+    echo -e "6.3.0"
+    echo -e "4.7.1"
+    echo
+    echo -e "Set install location with the PREFIX env"
     echo
     exit 0
 fi
