@@ -9,7 +9,7 @@ PARALLEL=${PARALLEL:--j$(nproc --all)}
 
 BINU_VER="2.47"
 GCC_VER="16.2.0"
-NEWL_VER="4.1.0.20260123"
+NEWL_VER="4.6.0.20260123"
 GCC_EXTRA_CFG=""
 
 ZLIB_DL="https://zlib.net/fossils/zlib-1.2.11.tar.gz"
@@ -118,8 +118,14 @@ toolchain_install()
             wget -c $NEWLIB_DL || fail_with_info
     fi
 
-    rm -rf build
-    mkdir build
+    # gcc keeps its own build dir: all-gcc is built before newlib, the
+    # target libraries are finished in the same dir after newlib
+    rm -rf build build-newlib
+    mkdir build build-newlib
+    if $BUILD_GCC; then
+        rm -rf build-gcc
+        mkdir build-gcc
+    fi
 
     if $BUILD_BINUTILS; then
         rm -rf $BINUTILS
@@ -181,23 +187,6 @@ toolchain_install()
             fi
         fi
 
-        cd build
-        echo -e "Configuring $GCC..."
-        ../$GCC/configure --target=$TARGET --prefix="$PREFIX" --with-libiconv-prefix=/opt/local -enable-interwork \
-            --enable-languages="c" --without-headers --disable-shared \
-            --with-newlib --disable-libmudflap --disable-libssp --disable-nls --disable-shared --without-headers \
-            --disable-decimal-float --enable-altivec \
-            $GCC_EXTRA_CFG --with-gmp=/opt/local --with-mpfr=/opt/local --with-cpu=cell >> $LOGFILE 2>&1 || fail_with_info
-        echo -e "Building $GCC, this could take a while..."
-        make $PARALLEL MAKEINFO=true all-gcc >> $LOGFILE 2>&1 || fail_with_info
-        echo -e "Installing $GCC..."
-        make MAKEINFO=true install-gcc >> $LOGFILE 2>&1 || fail_with_info
-        cd ..
-        rm -rf build/*
-        echo -e "Done"
-    fi
-
-    if $BUILD_NEWLIB; then
         rm -rf $NEWLIB
         mkdir -p $NEWLIB
         echo -e "Extracting $NEWLIB..."
@@ -205,9 +194,36 @@ toolchain_install()
 
         cat $NEWLIB.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
 
+        # the compiler is configured with its final options before newlib
+        # exists, so give it newlib's headers up front
         mkdir -p "$PREFIX/$TARGET/include" "$PREFIX/$TARGET/sys-include" || fail_with_info
+        cp -r $NEWLIB/newlib/libc/include/* "$PREFIX/$TARGET/include/" || fail_with_info
 
-        cd build
+        cd build-gcc
+        echo -e "Configuring $GCC..."
+        unset LIBRARY_PATH
+        ../$GCC/configure --target=$TARGET --prefix="$PREFIX" --with-libiconv-prefix=/opt/local --with-cpu=cell \
+            $GCC_EXTRA_CFG --with-gmp=/opt/local --with-mpfr=/opt/local --disable-decimal-float --disable-libquadmath \
+            --enable-languages=c,c++ --disable-libssp --disable-libsanitizer --with-newlib --enable-cxx-flags="-G0" \
+            --disable-libmudflap --disable-nls --disable-shared --disable-linux-futex --enable-altivec \
+            --disable-libatomic --disable-threads --disable-libgomp --disable-libitm --disable-libstdcxx-time --disable-initfini-array -v >> $LOGFILE 2>&1 || fail_with_info
+        echo -e "Building $GCC (compiler only), this could take a while..."
+        make $PARALLEL MAKEINFO=true all-gcc >> $LOGFILE 2>&1 || fail_with_info
+        echo -e "Installing $GCC (compiler only)..."
+        make MAKEINFO=true install-gcc >> $LOGFILE 2>&1 || fail_with_info
+        cd ..
+        echo -e "Done"
+    fi
+
+    if $BUILD_NEWLIB; then
+        if [ ! -d $NEWLIB/newlib ]; then
+            rm -rf $NEWLIB
+            echo -e "Extracting $NEWLIB..."
+            $EXTR $NEWLIB.tar.gz | tar xfz - >> $LOGFILE 2>&1 || fail_with_info
+            cat $NEWLIB.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
+        fi
+
+        cd build-newlib
         echo -e "Configuring $NEWLIB..."
         ../$NEWLIB/configure --target=$TARGET --prefix="$PREFIX"  --enable-multilib --disable-nls \
             CFLAGS="-DHAVE_BLKSIZE -O2" \
@@ -217,30 +233,26 @@ toolchain_install()
         echo -e "Installing $NEWLIB..."
         make install >> $LOGFILE 2>&1 || fail_with_info
         cd ..
-        #rm -rf build/*
         echo -e "Done"
     fi
 
     if $BUILD_GCC_SECOND; then
-        # Yes, you need to build gcc again!
-        cd build
-        echo -e "Configuring $GCC (2nd pass)..."
+        # finish the target libraries (libgcc, libstdc++) now that newlib is installed
+        if [ ! -f build-gcc/Makefile ]; then
+            echo -e "No configured gcc build in build-gcc, enable BUILD_GCC first."
+            exit 1
+        fi
+        cd build-gcc
         unset LIBRARY_PATH
-        ../$GCC/configure --target=$TARGET --prefix="$PREFIX" --with-libiconv-prefix=/opt/local --with-cpu=cell \
-            $GCC_EXTRA_CFG --with-gmp=/opt/local --with-mpfr=/opt/local --disable-decimal-float --disable-libquadmath \
-            --enable-languages=c,c++ --disable-libssp --disable-libsanitizer --with-newlib --enable-cxx-flags="-G0" \
-            --disable-libmudflap --disable-nls --disable-shared --disable-linux-futex --enable-altivec \
-            --disable-libatomic --disable-threads --disable-libgomp --disable-libitm --disable-libstdcxx-time --disable-initfini-array -v >> $LOGFILE 2>&1 || fail_with_info
-        echo -e "Building $GCC - (2nd pass), this could take a while..."
-        make $PARALLEL MAKEINFO=true >> $LOGFILE 2>&1 || fail_with_info
-        echo -e "Installing $GCC (2nd pass)..."
+        echo -e "Building $GCC target libraries, this could take a while..."
+        make $PARALLEL MAKEINFO=true all >> $LOGFILE 2>&1 || fail_with_info
+        echo -e "Installing $GCC..."
         make MAKEINFO=true install >> $LOGFILE 2>&1 || fail_with_info
         cd ..
-        rm -rf build/*
         echo -e "Done"
     fi
 
-    rm -rf build
+    rm -rf build build-gcc build-newlib
 }
 
 zlib_install()
@@ -526,19 +538,12 @@ if [ "$1" == "all" ] || [ "$1" == "toolchain" ]; then
         16.2.0*)
             BINU_VER="2.47"
             GCC_VER="16.2.0"
-            NEWL_VER="4.1.0.20260123"
+            NEWL_VER="4.6.0.20260123"
             ;;
         9.2.0*)
             BINU_VER="2.32"
             GCC_VER="9.2.0"
             NEWL_VER="3.1.0"
-            ;;
-        6.3.0*)
-            BINU_VER="2.28"
-            GCC_VER="6.3.0"
-            GCC_EXTRA_CFG="--without-isl" # gcc 6 graphite is incompatible with modern isl
-            export CXXFLAGS="-O2 -g -std=gnu++14 -fpermissive" # gcc 6 sources vs modern host g++
-            NEWL_VER="2.5.0"
             ;;
         6.3.0-vmx128*)
             BINU_VER="2.28"
@@ -547,6 +552,13 @@ if [ "$1" == "all" ] || [ "$1" == "toolchain" ]; then
             export CXXFLAGS="-O2 -g -std=gnu++14 -fpermissive"
             NEWL_VER="2.5.0"
             VMX_MODE="vmx128"
+            ;;
+        6.3.0*)
+            BINU_VER="2.28"
+            GCC_VER="6.3.0"
+            GCC_EXTRA_CFG="--without-isl" # gcc 6 graphite is incompatible with modern isl
+            export CXXFLAGS="-O2 -g -std=gnu++14 -fpermissive" # gcc 6 sources vs modern host g++
+            NEWL_VER="2.5.0"
             ;;
         #4.7.1*) Disabled as libxenon does not build
         #    BINU_VER="2.22"
@@ -558,7 +570,7 @@ if [ "$1" == "all" ] || [ "$1" == "toolchain" ]; then
         *) # default
             BINU_VER="2.47"
             GCC_VER="16.2.0"
-            NEWL_VER="4.1.0.20260123"
+            NEWL_VER="4.6.0.20260123"
             ;;
     esac
 
@@ -609,10 +621,10 @@ elif [ "$1" == "clean" ]; then
     rm -rf $LIBPNG $LIBPNG.tar.xz
     rm -rf $BZIP2 $BZIP2.tar.gz
     rm -rf $FREETYPE $FREETYPE.tar.gz
-    rm -rf build
-    rm -rf ext2fs-xenon
-    rm -rf fat-xenon
-    rm -rf xtaflib
+    rm -rf build build-gcc build-newlib
+    rm -rf libext2fs
+    rm -rf libfat
+    rm -rf libxtaf
     rm -f cube_normal.elf
     make -C ../devkitxenon/examples/xenon/graphics/cube clean
 elif [ "$1" == "env-cmd" ]; then
@@ -625,7 +637,7 @@ else
     echo -e "$0 <subcommand>"
     echo
     echo -e "Subcommands:"
-    echo -e "\"all\"       [version] - (toolchain, libs, and filesystems)" 
+    echo -e "\"all\"       [version] - (toolchain, libs, and filesystems)"
     echo -e "\"toolchain\" [version] - (install toolchain)"
     echo -e "\"libs\"                - (install libxenon + bin2s + libraries seen below)"
     echo -e "\"libxenon\"            - (install or update libxenon)"
@@ -643,7 +655,7 @@ else
     echo -e "9.2.0"
     echo -e "6.3.0-vmx128"
     echo -e "6.3.0"
-    echo -e "4.7.1"
+    # echo -e "4.7.1"
     echo
     echo -e "Set install location with the PREFIX env"
     echo

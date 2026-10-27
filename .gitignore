@@ -5,6 +5,8 @@
 *.d
 *.a
 toolchain/build
+toolchain/build-gcc
+toolchain/build-newlib
 toolchain/build.log
 toolchain/*.tar.gz
 toolchain/*.tar.bz2
