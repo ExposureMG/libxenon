@@ -1,0 +1,14 @@
+diff -ENwbur ../newlib-4.6.0.20260123/config.sub newlib-4.6.0.20260123/config.sub
+--- ../newlib-4.6.0.20260123/config.sub	2026-10-24 14:05:32.672481487 +0100
++++ newlib-4.6.0.20260123/config.sub	2026-10-24 14:46:07.405376625 +0100
+@@ -887,6 +887,10 @@
+ 		cpu=i386
+ 		vendor=ibm
+ 		;;
++	ppu | xenon)
++		cpu=powerpc64
++		vendor=unknown
++		;;
+ 	rm[46]00)
+ 		cpu=mips
+ 		vendor=siemens

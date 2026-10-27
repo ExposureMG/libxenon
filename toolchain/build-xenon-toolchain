@@ -7,9 +7,9 @@ TARGET=xenon
 PREFIX="${PREFIX:-/usr/local/xenon}" # Install location of your final toolchain.
 PARALLEL=${PARALLEL:--j$(nproc --all)}
 
-BINU_VER="2.32"
+BINU_VER="2.47"
 GCC_VER="16.2.0"
-NEWL_VER="3.1.0"
+NEWL_VER="4.1.0.20260123"
 GCC_EXTRA_CFG=""
 
 ZLIB_DL="https://zlib.net/fossils/zlib-1.2.11.tar.gz"
@@ -524,9 +524,9 @@ if [ "$1" == "all" ] || [ "$1" == "toolchain" ]; then
     # available [version] packs
     case "$2" in
         16.2.0*)
-            BINU_VER="2.32"
+            BINU_VER="2.47"
             GCC_VER="16.2.0"
-            NEWL_VER="3.1.0"
+            NEWL_VER="4.1.0.20260123"
             ;;
         9.2.0*)
             BINU_VER="2.32"
@@ -556,9 +556,9 @@ if [ "$1" == "all" ] || [ "$1" == "toolchain" ]; then
         #    NEWL_VER="1.20.0"
         #    ;;
         *) # default
-            BINU_VER="2.32"
+            BINU_VER="2.47"
             GCC_VER="16.2.0"
-            NEWL_VER="3.1.0"
+            NEWL_VER="4.1.0.20260123"
             ;;
     esac
 
