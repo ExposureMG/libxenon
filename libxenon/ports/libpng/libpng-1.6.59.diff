@@ -1,0 +1,19 @@
+--- libpng-1.6.59/pngconf.h	2026-10-28 15:53:52.644035900 +0000
++++ libpng-1.6.59/pngconf.h	2026-10-28 15:53:52.677473630 +0000
+@@ -55,6 +55,16 @@
+ #  include <time.h>
+ #endif
+ 
++/* xenon: libpng 1.5 source compatibility for existing homebrew.  1.5's
++ * pngconf.h pulled in <string.h> and defined png_sizeof; 1.6 dropped both,
++ * which breaks code that relied on them (implicit memcpy etc. are errors
++ * with GCC 14+).
++ */
++#include <string.h>
++#ifndef png_sizeof
++#  define png_sizeof(x) (sizeof (x))
++#endif
++
+ #endif /* PNG_BUILDING_SYMBOL_TABLE */
+ 
+ /* Prior to 1.6.0, it was possible to turn off 'const' in declarations,

@@ -13,10 +13,10 @@ NEWL_VER="4.6.0.20260123"
 GCC_EXTRA_CFG=""
 
 ZLIB_DL="https://zlib.net/fossils/zlib-1.3.2.tar.gz"
-LIBPNG_DL="https://download.sourceforge.net/libpng/libpng-1.5.30.tar.xz"
+LIBPNG_DL="https://download.sourceforge.net/libpng/libpng-1.6.59.tar.xz"
 BZIP2_DL="https://sourceware.org/pub/bzip2/bzip2-1.0.8.tar.gz"
-# FREETYPE_DL="https://download.savannah.gnu.org/releases/freetype/freetype-2.10.4.tar.gz"
-FREETYPE_DL="https://mirror.netcologne.de/savannah/freetype/freetype-2.10.4.tar.gz"
+# FREETYPE_DL="https://download.savannah.gnu.org/releases/freetype/freetype-2.15.0.tar.gz"
+FREETYPE_DL="https://mirror.netcologne.de/savannah/freetype/freetype-2.15.0.tar.gz"
 
 ZLIB=$(basename $ZLIB_DL .tar.gz)
 LIBPNG=$(basename $LIBPNG_DL .tar.xz)
@@ -306,26 +306,35 @@ libpng_install()
 
     echo -e "Extracting $LIBPNG..."
     rm -rf $LIBPNG
-    tar xJf $LIBPNG.tar.xz >> $LOGFILE 2>&1 || fail_with_info
+    tar xJf $LIBPNG.tar.xz >> $LOGFILE 2>&1 && cat ../libxenon/ports/libpng/$LIBPNG.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
     cd $LIBPNG
 
     export CC=$TARGET-gcc
     export CFLAGS="-mcpu=cell -mtune=cell -m32 -fno-pic -mpowerpc64 $DEVKITXENON/usr/lib/libxenon.a -L$DEVKITXENON/xenon/lib/32 -T$DEVKITXENON/app.lds -u read -u _start -u exc_base -L$DEVKITXENON/usr/lib -I$DEVKITXENON/usr/include"
     export LDFLAGS="${CFLAGS//-T$DEVKITXENON\/app.lds/}"
+    export CPPFLAGS="-I$DEVKITXENON/usr/include" # pnglibconf generation only sees CPPFLAGS
 
     echo -e "Configuring $LIBPNG..."
-    ./configure --disable-shared --enable-static --prefix=$DEVKITXENON/usr --host=ppc-elf >> $LOGFILE 2>&1 || fail_with_info
+    ./configure --disable-shared --enable-static --disable-tests --disable-tools --disable-hardware-optimizations --prefix=$DEVKITXENON/usr --host=ppc-elf >> $LOGFILE 2>&1 || fail_with_info
 
     echo -e "Building $LIBPNG..."
     make $PARALLEL CROSS_COMPILE=$TARGET- CFLAGS="${CFLAGS//$DEVKITXENON\/usr\/lib\/libxenon.a/}" LDFLAGS="${LDFLAGS//$DEVKITXENON\/usr\/lib\/libxenon.a/}" check_PROGRAMS= >> $LOGFILE 2>&1 || fail_with_info
     echo -e "Installing $LIBPNG..."
     make CROSS_COMPILE=$TARGET- CFLAGS="${CFLAGS//$DEVKITXENON\/usr\/lib\/libxenon.a/}" LDFLAGS="${LDFLAGS//$DEVKITXENON\/usr\/lib\/libxenon.a/}" check_PROGRAMS= install >> $LOGFILE 2>&1 || fail_with_info
+    # libpng 1.5 names, for homebrew that links -lpng15 or includes <libpng15/png.h>
+    rm -f $DEVKITXENON/usr/lib/libpng15.la
+    ln -sfn libpng16.a $DEVKITXENON/usr/lib/libpng15.a
+    ln -sfn libpng16.pc $DEVKITXENON/usr/lib/pkgconfig/libpng15.pc
+    rm -rf $DEVKITXENON/usr/include/libpng15 # may be a real dir from a 1.5 install
+    ln -sfn libpng16 $DEVKITXENON/usr/include/libpng15
+    ln -sfn libpng16-config $DEVKITXENON/usr/bin/libpng15-config
     cd ..
     rm -rf $LIBPNG
 
     export CC=""
     export CFLAGS=""
     export LDFLAGS=""
+    export CPPFLAGS=""
 
     echo -e "Done"
 }
