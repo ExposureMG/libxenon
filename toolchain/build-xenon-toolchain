@@ -12,9 +12,9 @@ GCC_VER="16.2.0"
 NEWL_VER="4.6.0.20260123"
 GCC_EXTRA_CFG=""
 
-ZLIB_DL="https://zlib.net/fossils/zlib-1.2.11.tar.gz"
+ZLIB_DL="https://zlib.net/fossils/zlib-1.3.2.tar.gz"
 LIBPNG_DL="https://download.sourceforge.net/libpng/libpng-1.5.30.tar.xz"
-BZIP2_DL="https://sourceware.org/pub/bzip2/bzip2-1.0.6.tar.gz"
+BZIP2_DL="https://sourceware.org/pub/bzip2/bzip2-1.0.8.tar.gz"
 # FREETYPE_DL="https://download.savannah.gnu.org/releases/freetype/freetype-2.10.4.tar.gz"
 FREETYPE_DL="https://mirror.netcologne.de/savannah/freetype/freetype-2.10.4.tar.gz"
 
@@ -272,7 +272,7 @@ zlib_install()
     export TARGET_SAVE=$TARGET
     export CC=$TARGET-gcc
     export CFLAGS="-mcpu=cell -mtune=cell -m32 -fno-pic -mpowerpc64 -Wno-error -L$DEVKITXENON/xenon/lib/32/ -T$DEVKITXENON/app.lds -u read -u _start -u exc_base -L$DEVKITXENON/usr/lib -I$DEVKITXENON/usr/include"
-    export LDFLAGS="${CFLAGS//-T$DEVKITXENON\/app.lds/}" # avoid duplicate -T
+    export LDFLAGS="${CFLAGS//-T$DEVKITXENON\/app.lds/} -lxenon" # avoid duplicate -T
     export TARGET=`gcc -v 2>&1 | sed -n '2p' | awk '{print $2}'`
 
     echo -e "Configuring $ZLIB..."
