@@ -70,6 +70,20 @@ fail_with_info()
     exit 1
 }
 
+patch_newlib()
+{
+    if [ "$VMX_MODE" == "xenon-target" ]; then
+        if [ -f $NEWLIB-xenon.diff ]; then
+            echo -e "Applying newlib xenon target patches..."
+            patch --batch -p1 -d $NEWLIB < $NEWLIB-xenon.diff >> $LOGFILE 2>&1 || fail_with_info
+        else
+            echo -e "No xenon target patch found for newlib version $NEWL_VER."
+            exit 1
+        fi
+    else
+        cat $NEWLIB.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
+    fi
+}
 
 # to compile and install libxenon
 libxenon_install()
@@ -133,16 +147,26 @@ toolchain_install()
         echo -e "Extracting $BINUTILS..."
         $EXTR $BINUTILS.tar.gz | tar xfz - >> $LOGFILE 2>&1 || fail_with_info
 
-        cat $BINUTILS.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
-
         if [ "$VMX_MODE" == "vmx128" ]; then
             if [ -f $BINUTILS-vmx128.diff ]; then
+                cat $BINUTILS.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
                 echo -e "Applying vmx128 support..."
                 cat $BINUTILS-vmx128.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
             else
+                cat $BINUTILS.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
                 echo -e "No vmx128 diff found for binutils version $BINU_VER."
                 exit 1
             fi
+        elif [ "$VMX_MODE" == "xenon-target" ]; then
+            if [ -f $BINUTILS-xenon.diff ]; then
+                echo -e "Applying xenon target patches..."
+                patch --batch -p1 -d $BINUTILS < $BINUTILS-xenon.diff >> $LOGFILE 2>&1 || fail_with_info
+            else
+                echo -e "No xenon target patch found for binutils version $BINU_VER."
+                exit 1
+            fi
+        else
+            cat $BINUTILS.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
         fi
 
         cd build
@@ -175,9 +199,8 @@ toolchain_install()
         echo -e "Extracting $GCC..."
         $EXTR $GCC.tar.gz | tar xfz - >> $LOGFILE 2>&1 || fail_with_info
 
-        cat $GCC.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
-
         if [ "$VMX_MODE" == "vmx128" ]; then
+            cat $GCC.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
             if [ -f $GCC-vmx128.diff ]; then
                 echo -e "Applying vmx128 support..."
                 cat $GCC-vmx128.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
@@ -185,14 +208,23 @@ toolchain_install()
                 echo -e "No vmx128 diff found for gcc version $GCC_VER."
                 exit 1
             fi
+        elif [ "$VMX_MODE" == "xenon-target" ]; then
+            if [ -f $GCC-xenon.diff ]; then
+                echo -e "Applying xenon target patches..."
+                patch --batch -p1 -d $GCC < $GCC-xenon.diff >> $LOGFILE 2>&1 || fail_with_info
+            else
+                echo -e "No xenon target patch found for gcc version $GCC_VER."
+                exit 1
+            fi
+        else
+            cat $GCC.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
         fi
 
         rm -rf $NEWLIB
         mkdir -p $NEWLIB
         echo -e "Extracting $NEWLIB..."
         $EXTR $NEWLIB.tar.gz | tar xfz - >> $LOGFILE 2>&1 || fail_with_info
-
-        cat $NEWLIB.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
+        patch_newlib
 
         # the compiler is configured with its final options before newlib
         # exists, so give it newlib's headers up front
@@ -202,7 +234,7 @@ toolchain_install()
         cd build-gcc
         echo -e "Configuring $GCC..."
         unset LIBRARY_PATH
-        ../$GCC/configure --target=$TARGET --prefix="$PREFIX" --with-libiconv-prefix=/opt/local --with-cpu=cell \
+        ../$GCC/configure --target=$TARGET --prefix="$PREFIX" --with-libiconv-prefix=/opt/local --with-cpu=$GCC_CPU \
             $GCC_EXTRA_CFG --with-gmp=/opt/local --with-mpfr=/opt/local --disable-decimal-float --disable-libquadmath \
             --enable-languages=c,c++ --disable-libssp --disable-libsanitizer --with-newlib --enable-cxx-flags="-G0" \
             --disable-libmudflap --disable-nls --disable-shared --disable-linux-futex --enable-altivec \
@@ -220,13 +252,13 @@ toolchain_install()
             rm -rf $NEWLIB
             echo -e "Extracting $NEWLIB..."
             $EXTR $NEWLIB.tar.gz | tar xfz - >> $LOGFILE 2>&1 || fail_with_info
-            cat $NEWLIB.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
+            patch_newlib
         fi
 
         cd build-newlib
         echo -e "Configuring $NEWLIB..."
         ../$NEWLIB/configure --target=$TARGET --prefix="$PREFIX"  --enable-multilib --disable-nls \
-            CFLAGS="-DHAVE_BLKSIZE -O2" \
+            CFLAGS="-DHAVE_BLKSIZE -O2" $NEWLIB_EXTRA_CFG \
             --enable-newlib-io-long-long --enable-newlib-io-long-double >> $LOGFILE 2>&1 || fail_with_info
         echo -e "Building $NEWLIB, this could take a while..."
         make $PARALLEL >> $LOGFILE 2>&1 || fail_with_info
@@ -544,6 +576,14 @@ if [ "$1" == "all" ] || [ "$1" == "toolchain" ]; then
 
     # available [version] packs
     case "$2" in
+        16.2.0-xenon*)
+            BINU_VER="2.47"
+            GCC_VER="16.2.0"
+            NEWL_VER="4.6.0.20260123"
+            VMX_MODE="xenon-target"
+            GCC_CPU="xenon"
+            NEWLIB_EXTRA_CFG="--disable-newlib-supplied-syscalls" # libxenon provides the syscalls
+            ;;
         16.2.0*)
             BINU_VER="2.47"
             GCC_VER="16.2.0"
@@ -661,6 +701,7 @@ else
     echo
     echo -e "Versions:"
     echo -e "16.2.0 (Default)"
+    echo -e "16.2.0-xenon"
     echo -e "9.2.0"
     echo -e "6.3.0-vmx128"
     echo -e "6.3.0"

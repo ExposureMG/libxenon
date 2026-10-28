@@ -1,0 +1,782 @@
+diff --git newlib-4.6.0.20260123/config.sub newlib/config.sub
+index 38f3d03..f1ffeb7 100755
+--- newlib-4.6.0.20260123/config.sub
++++ newlib/config.sub
+@@ -187,7 +187,7 @@ case $1 in
+ 					| ultra | tti* | harris | dolphin | highlevel | gould \
+ 					| cbm | ns | masscomp | apple | axis | knuth | cray \
+ 					| microblaze* | sim | cisco \
+-					| oki | wec | wrs | winbond)
++					| oki | wec | wrs | winbond | xenon)
+ 						basic_machine=$field1-$field2
+ 						basic_os=
+ 						;;
+@@ -900,6 +900,13 @@ case $basic_machine in
+ 		vendor=sde
+ 		basic_os=${basic_os:-elf}
+ 		;;
++	# Microsoft Xbox 360 (Xenon) PPE, bare metal.  "xenon" and "xenon-*"
++	# are shorthands for powerpc64-xenon-elf.
++	xenon | xenon-*)
++		cpu=powerpc64
++		vendor=xenon
++		basic_os=${basic_os:-elf}
++		;;
+ 	simso-wrs)
+ 		cpu=sparclite
+ 		vendor=wrs
+@@ -1530,6 +1537,9 @@ case $cpu-$vendor in
+ 	spu-*)
+ 		os=elf
+ 		;;
++	*-xenon)
++		os=elf
++		;;
+ 	*-acorn)
+ 		os=riscix1.2
+ 		;;
+diff --git newlib-4.6.0.20260123/newlib/configure.host newlib/newlib/configure.host
+index 960cca2..1f33c2b 100644
+--- newlib-4.6.0.20260123/newlib/configure.host
++++ newlib/newlib/configure.host
+@@ -823,6 +823,20 @@ newlib_cflags="${newlib_cflags} -DCLOCK_PROVIDED -DMALLOC_PROVIDED -DEXIT_PROVID
+ 	default_newlib_io_long_long="yes"
+ 	newlib_cflags="${newlib_cflags} -DMISSING_SYSCALL_NAMES"
+ 	;;
++  powerpc64-xenon-elf*)
++	# Xbox 360 (Xenon), ELF64 / LP64, bare metal.  libxenon supplies the
++	# syscalls under their plain POSIX names (read, write, sbrk, ...), so
++	# build with --disable-newlib-supplied-syscalls.  The generic
++	# powerpc*-*-elf* flags do not apply: -mrelocatable-lib is 32-bit
++	# SysV only (GCC rejects it for this target) and -mno-eabi is
++	# meaningless for ELF64.  No -mstrict-align: integer and vector
++	# accesses never trap on a misaligned address on Xenon (FINDINGS 1),
++	# and GCC itself never emits an FP load/store below 4-byte alignment,
++	# which does trap: rs6000_emit_move moves such SF/DF values through
++	# GPRs (xenon_misaligned_mov{si,di}, gcc/config/rs6000/xenon.md).
++	default_newlib_io_long_long="yes"
++	newlib_cflags="${newlib_cflags} -DMISSING_SYSCALL_NAMES"
++	;;
+   powerpc*-*-eabi* | \
+   powerpc*-*-elf* | \
+   powerpc*-*-linux* | \
+diff --git newlib-4.6.0.20260123/newlib/libc/include/machine/setjmp.h newlib/newlib/libc/include/machine/setjmp.h
+index ab820ed..51a6740 100644
+--- newlib-4.6.0.20260123/newlib/libc/include/machine/setjmp.h
++++ newlib/newlib/libc/include/machine/setjmp.h
+@@ -186,20 +186,37 @@ _BEGIN_STD_C
+ #endif
+ 
+ #ifdef __PPC__
++/* The Xbox 360 Xenon (powerpc64-xenon-elf, __XENON__) setjmp also saves the
++   VMX128 callee-saved registers v64-v127 when built with -mvmx128
++   (__VMX128__): 1 KiB more.  Every compilation for that target gets the
++   large buffer, whatever its -mcpu, so that a jmp_buf is always big enough
++   for the setjmp in the C library.  */
+ #ifdef __powerpc64__
+-#ifdef __ALTIVEC__
++#if defined (__VMX128__) || defined (__XENON__)
++#define _JBLEN 198
++#elif defined (__ALTIVEC__)
+ #define _JBLEN 70
+ #else
+ #define _JBLEN 43
+ #endif
+ #else
+-#ifdef __ALTIVEC__
++#if defined (__VMX128__) || defined (__XENON__)
++#define _JBLEN 192
++#elif defined (__ALTIVEC__)
+ #define _JBLEN 64
+ #else
+ #define _JBLEN 32
+ #endif
+ #endif
+ #define _JBTYPE double
++/* Xenon: the C library's setjmp is __setjmp_vmx128, and <setjmp.h>
++   declares setjmp with that assembler name.  An object compiled against
++   older headers (a jmp_buf of 512 or 560 bytes, into which this setjmp
++   would write 1576) refers to plain setjmp and so fails to link instead of
++   corrupting memory: rebuild it with these headers.  */
++#if defined (__XENON__) && defined (__GNUC__)
++#define _SETJMP_ASM_NAME "__setjmp_vmx128"
++#endif
+ #endif
+ 
+ #ifdef __MICROBLAZE__
+diff --git newlib-4.6.0.20260123/newlib/libc/include/setjmp.h newlib/newlib/libc/include/setjmp.h
+index 62dd27e..7fdbda0 100644
+--- newlib-4.6.0.20260123/newlib/libc/include/setjmp.h
++++ newlib/newlib/libc/include/setjmp.h
+@@ -13,7 +13,13 @@
+ _BEGIN_STD_C
+ 
+ void	longjmp (jmp_buf __jmpb, int __retval) __dead2;
++#ifdef _SETJMP_ASM_NAME
++/* The target's setjmp has another assembler name (machine/setjmp.h).  */
++int	setjmp (jmp_buf __jmpb) __asm__ (__ASMNAME (_SETJMP_ASM_NAME))
++	__returns_twice;
++#else
+ int	setjmp (jmp_buf __jmpb) __returns_twice;
++#endif
+ 
+ _END_STD_C
+ 
+diff --git newlib-4.6.0.20260123/newlib/libc/machine/powerpc/setjmp.S newlib/newlib/libc/machine/powerpc/setjmp.S
+index c7af5b1..3b545d8 100644
+--- newlib-4.6.0.20260123/newlib/libc/machine/powerpc/setjmp.S
++++ newlib/newlib/libc/machine/powerpc/setjmp.S
+@@ -5,7 +5,16 @@
+ 
+ #include "ppc-asm.h"
+ 
+-FUNC_START(setjmp)
++/* Xenon: setjmp is __setjmp_vmx128 (see machine/setjmp.h), so that objects
++   built with older headers, whose jmp_buf is too small for the v64-v127
++   saves below, fail to link instead of overflowing their buffer.  */
++#ifdef __XENON__
++#define SETJMP_NAME __setjmp_vmx128
++#else
++#define SETJMP_NAME setjmp
++#endif
++
++FUNC_START(SETJMP_NAME)
+ #ifdef __ALTIVEC__
+ 	addi	3,3,15		# align Altivec to 16 byte boundary
+ #if __powerpc64__
+@@ -189,13 +198,148 @@ FUNC_START(setjmp)
+ 	stvx	30,0,3		# offset 416
+ 	addi	3,3,16
+ 	stvx	31,0,3		# offset 432
+-1:
+ 
+ 	/* This requires a total of 240 + 8 + 8 + 12 * 16 == 448 bytes. */
++#ifdef __VMX128__
++	/* Xbox 360 Xenon VMX128: save the callee-saved v64-v127 (GCC
++	   -mvmx128, plan 4.3), 16-byte aligned like v20-v31.  stvx128 takes
++	   [reg+reg] addresses only; RA = 0 reads as zero, so EA = r3.  */
++	addi	3,3,16
++	stvx128	64,0,3		# offset 448
++	addi	3,3,16
++	stvx128	65,0,3		# offset 464
++	addi	3,3,16
++	stvx128	66,0,3		# offset 480
++	addi	3,3,16
++	stvx128	67,0,3		# offset 496
++	addi	3,3,16
++	stvx128	68,0,3		# offset 512
++	addi	3,3,16
++	stvx128	69,0,3		# offset 528
++	addi	3,3,16
++	stvx128	70,0,3		# offset 544
++	addi	3,3,16
++	stvx128	71,0,3		# offset 560
++	addi	3,3,16
++	stvx128	72,0,3		# offset 576
++	addi	3,3,16
++	stvx128	73,0,3		# offset 592
++	addi	3,3,16
++	stvx128	74,0,3		# offset 608
++	addi	3,3,16
++	stvx128	75,0,3		# offset 624
++	addi	3,3,16
++	stvx128	76,0,3		# offset 640
++	addi	3,3,16
++	stvx128	77,0,3		# offset 656
++	addi	3,3,16
++	stvx128	78,0,3		# offset 672
++	addi	3,3,16
++	stvx128	79,0,3		# offset 688
++	addi	3,3,16
++	stvx128	80,0,3		# offset 704
++	addi	3,3,16
++	stvx128	81,0,3		# offset 720
++	addi	3,3,16
++	stvx128	82,0,3		# offset 736
++	addi	3,3,16
++	stvx128	83,0,3		# offset 752
++	addi	3,3,16
++	stvx128	84,0,3		# offset 768
++	addi	3,3,16
++	stvx128	85,0,3		# offset 784
++	addi	3,3,16
++	stvx128	86,0,3		# offset 800
++	addi	3,3,16
++	stvx128	87,0,3		# offset 816
++	addi	3,3,16
++	stvx128	88,0,3		# offset 832
++	addi	3,3,16
++	stvx128	89,0,3		# offset 848
++	addi	3,3,16
++	stvx128	90,0,3		# offset 864
++	addi	3,3,16
++	stvx128	91,0,3		# offset 880
++	addi	3,3,16
++	stvx128	92,0,3		# offset 896
++	addi	3,3,16
++	stvx128	93,0,3		# offset 912
++	addi	3,3,16
++	stvx128	94,0,3		# offset 928
++	addi	3,3,16
++	stvx128	95,0,3		# offset 944
++	addi	3,3,16
++	stvx128	96,0,3		# offset 960
++	addi	3,3,16
++	stvx128	97,0,3		# offset 976
++	addi	3,3,16
++	stvx128	98,0,3		# offset 992
++	addi	3,3,16
++	stvx128	99,0,3		# offset 1008
++	addi	3,3,16
++	stvx128	100,0,3		# offset 1024
++	addi	3,3,16
++	stvx128	101,0,3		# offset 1040
++	addi	3,3,16
++	stvx128	102,0,3		# offset 1056
++	addi	3,3,16
++	stvx128	103,0,3		# offset 1072
++	addi	3,3,16
++	stvx128	104,0,3		# offset 1088
++	addi	3,3,16
++	stvx128	105,0,3		# offset 1104
++	addi	3,3,16
++	stvx128	106,0,3		# offset 1120
++	addi	3,3,16
++	stvx128	107,0,3		# offset 1136
++	addi	3,3,16
++	stvx128	108,0,3		# offset 1152
++	addi	3,3,16
++	stvx128	109,0,3		# offset 1168
++	addi	3,3,16
++	stvx128	110,0,3		# offset 1184
++	addi	3,3,16
++	stvx128	111,0,3		# offset 1200
++	addi	3,3,16
++	stvx128	112,0,3		# offset 1216
++	addi	3,3,16
++	stvx128	113,0,3		# offset 1232
++	addi	3,3,16
++	stvx128	114,0,3		# offset 1248
++	addi	3,3,16
++	stvx128	115,0,3		# offset 1264
++	addi	3,3,16
++	stvx128	116,0,3		# offset 1280
++	addi	3,3,16
++	stvx128	117,0,3		# offset 1296
++	addi	3,3,16
++	stvx128	118,0,3		# offset 1312
++	addi	3,3,16
++	stvx128	119,0,3		# offset 1328
++	addi	3,3,16
++	stvx128	120,0,3		# offset 1344
++	addi	3,3,16
++	stvx128	121,0,3		# offset 1360
++	addi	3,3,16
++	stvx128	122,0,3		# offset 1376
++	addi	3,3,16
++	stvx128	123,0,3		# offset 1392
++	addi	3,3,16
++	stvx128	124,0,3		# offset 1408
++	addi	3,3,16
++	stvx128	125,0,3		# offset 1424
++	addi	3,3,16
++	stvx128	126,0,3		# offset 1440
++	addi	3,3,16
++	stvx128	127,0,3		# offset 1456
++
++	/* This requires a total of 448 + 64 * 16 == 1472 bytes.  */
++#endif
++1:
+ #endif
+ 	li	3,0
+ 	blr
+-FUNC_END(setjmp)
++FUNC_END(SETJMP_NAME)
+ 
+ 
+ FUNC_START(longjmp)
+@@ -377,6 +521,137 @@ FUNC_START(longjmp)
+ 	lvx	30,0,3		# offset 416
+ 	addi	3,3,16
+ 	lvx	31,0,3		# offset 432
++#ifdef __VMX128__
++	/* Xbox 360 Xenon VMX128: restore the callee-saved v64-v127.  */
++	addi	3,3,16
++	lvx128	64,0,3		# offset 448
++	addi	3,3,16
++	lvx128	65,0,3		# offset 464
++	addi	3,3,16
++	lvx128	66,0,3		# offset 480
++	addi	3,3,16
++	lvx128	67,0,3		# offset 496
++	addi	3,3,16
++	lvx128	68,0,3		# offset 512
++	addi	3,3,16
++	lvx128	69,0,3		# offset 528
++	addi	3,3,16
++	lvx128	70,0,3		# offset 544
++	addi	3,3,16
++	lvx128	71,0,3		# offset 560
++	addi	3,3,16
++	lvx128	72,0,3		# offset 576
++	addi	3,3,16
++	lvx128	73,0,3		# offset 592
++	addi	3,3,16
++	lvx128	74,0,3		# offset 608
++	addi	3,3,16
++	lvx128	75,0,3		# offset 624
++	addi	3,3,16
++	lvx128	76,0,3		# offset 640
++	addi	3,3,16
++	lvx128	77,0,3		# offset 656
++	addi	3,3,16
++	lvx128	78,0,3		# offset 672
++	addi	3,3,16
++	lvx128	79,0,3		# offset 688
++	addi	3,3,16
++	lvx128	80,0,3		# offset 704
++	addi	3,3,16
++	lvx128	81,0,3		# offset 720
++	addi	3,3,16
++	lvx128	82,0,3		# offset 736
++	addi	3,3,16
++	lvx128	83,0,3		# offset 752
++	addi	3,3,16
++	lvx128	84,0,3		# offset 768
++	addi	3,3,16
++	lvx128	85,0,3		# offset 784
++	addi	3,3,16
++	lvx128	86,0,3		# offset 800
++	addi	3,3,16
++	lvx128	87,0,3		# offset 816
++	addi	3,3,16
++	lvx128	88,0,3		# offset 832
++	addi	3,3,16
++	lvx128	89,0,3		# offset 848
++	addi	3,3,16
++	lvx128	90,0,3		# offset 864
++	addi	3,3,16
++	lvx128	91,0,3		# offset 880
++	addi	3,3,16
++	lvx128	92,0,3		# offset 896
++	addi	3,3,16
++	lvx128	93,0,3		# offset 912
++	addi	3,3,16
++	lvx128	94,0,3		# offset 928
++	addi	3,3,16
++	lvx128	95,0,3		# offset 944
++	addi	3,3,16
++	lvx128	96,0,3		# offset 960
++	addi	3,3,16
++	lvx128	97,0,3		# offset 976
++	addi	3,3,16
++	lvx128	98,0,3		# offset 992
++	addi	3,3,16
++	lvx128	99,0,3		# offset 1008
++	addi	3,3,16
++	lvx128	100,0,3		# offset 1024
++	addi	3,3,16
++	lvx128	101,0,3		# offset 1040
++	addi	3,3,16
++	lvx128	102,0,3		# offset 1056
++	addi	3,3,16
++	lvx128	103,0,3		# offset 1072
++	addi	3,3,16
++	lvx128	104,0,3		# offset 1088
++	addi	3,3,16
++	lvx128	105,0,3		# offset 1104
++	addi	3,3,16
++	lvx128	106,0,3		# offset 1120
++	addi	3,3,16
++	lvx128	107,0,3		# offset 1136
++	addi	3,3,16
++	lvx128	108,0,3		# offset 1152
++	addi	3,3,16
++	lvx128	109,0,3		# offset 1168
++	addi	3,3,16
++	lvx128	110,0,3		# offset 1184
++	addi	3,3,16
++	lvx128	111,0,3		# offset 1200
++	addi	3,3,16
++	lvx128	112,0,3		# offset 1216
++	addi	3,3,16
++	lvx128	113,0,3		# offset 1232
++	addi	3,3,16
++	lvx128	114,0,3		# offset 1248
++	addi	3,3,16
++	lvx128	115,0,3		# offset 1264
++	addi	3,3,16
++	lvx128	116,0,3		# offset 1280
++	addi	3,3,16
++	lvx128	117,0,3		# offset 1296
++	addi	3,3,16
++	lvx128	118,0,3		# offset 1312
++	addi	3,3,16
++	lvx128	119,0,3		# offset 1328
++	addi	3,3,16
++	lvx128	120,0,3		# offset 1344
++	addi	3,3,16
++	lvx128	121,0,3		# offset 1360
++	addi	3,3,16
++	lvx128	122,0,3		# offset 1376
++	addi	3,3,16
++	lvx128	123,0,3		# offset 1392
++	addi	3,3,16
++	lvx128	124,0,3		# offset 1408
++	addi	3,3,16
++	lvx128	125,0,3		# offset 1424
++	addi	3,3,16
++	lvx128	126,0,3		# offset 1440
++	addi	3,3,16
++	lvx128	127,0,3		# offset 1456
++#endif
+ 1:
+ #endif
+ 
+diff --git newlib-4.6.0.20260123/newlib/libc/machine/powerpc/vec_mallocr.c newlib/newlib/libc/machine/powerpc/vec_mallocr.c
+index c375c8b..40e1e92 100644
+--- newlib-4.6.0.20260123/newlib/libc/machine/powerpc/vec_mallocr.c
++++ newlib/newlib/libc/machine/powerpc/vec_mallocr.c
+@@ -45,6 +45,11 @@ extern "C" {
+ #include <reent.h>
+ #include <string.h>
+ #include <malloc.h>
++#include <errno.h>
++#include <limits.h>
++#include <stdint.h>
++
++#define RERRNO _REENT_ERRNO(reent_ptr)
+ 
+ #define MALLOC_LOCK __malloc_lock(reent_ptr)
+ #define MALLOC_UNLOCK __malloc_unlock(reent_ptr)
+@@ -349,6 +354,15 @@ Void_t* vECREALLOc(RARG oldmem, bytes) RDECL Void_t* oldmem; size_t bytes;
+ 
+   nb = request2size(bytes);
+ 
++  /* Same limit as _realloc_r: request2size wraps for huge requests, which
++     would otherwise be taken as an in-place shrink.  */
++  if (nb > INT_MAX || nb < bytes)
++  {
++    RERRNO = ENOMEM;
++    MALLOC_UNLOCK;
++    return 0;
++  }
++
+   if ((long)(oldsize) < (long)(nb))  
+   {
+     /* Must allocate */
+@@ -405,10 +419,17 @@ Void_t* vECCALLOc(RARG size_t n, size_t elem_size)
+ Void_t* vECCALLOc(RARG n, elem_size) RDECL size_t n; size_t elem_size;
+ #endif
+ {
+-  INTERNAL_SIZE_T sz = n * elem_size;
+-
++  INTERNAL_SIZE_T sz;
+   Void_t* mem;
+ 
++  /* n * elem_size must not wrap (it would allocate a short block).  */
++  if (elem_size != 0 && n > SIZE_MAX / elem_size)
++  {
++    RERRNO = ENOMEM;
++    return 0;
++  }
++  sz = n * elem_size;
++
+   mem = mEMALIGn (RCALL 16, sz);
+ 
+   if (mem == 0) 
+diff --git newlib-4.6.0.20260123/newlib/libc/machine/powerpc/vfprintf.c newlib/newlib/libc/machine/powerpc/vfprintf.c
+index a8af4c3..1a00cbd 100644
+--- newlib-4.6.0.20260123/newlib/libc/machine/powerpc/vfprintf.c
++++ newlib/newlib/libc/machine/powerpc/vfprintf.c
+@@ -141,7 +141,9 @@ typedef union
+   vector int v;
+   float f[4];
+   int   i[16 / sizeof(int)];
+-  long  l[4];
++  /* The "l" vector modifier selects 32-bit elements (AltiVec PIM), so
++     these must not be "long", which is 64 bits on LP64.  */
++  __int32_t l[4];
+   short s[8];
+   signed char c[16];
+ } vec_16_byte_union;
+@@ -390,12 +392,12 @@ _VFPRINTF_R (struct _reent *data,
+ #define GET_LONG(ap) \
+ 	(flags&VECTOR ? \
+ 	    (vec_print_count < 4 ? (long)vec_tmp.l[4 - vec_print_count] : \
+-	        (vec_tmp.v = va_arg(ap, vector int), vec_tmp.l[0])) : \
++	        (vec_tmp.v = va_arg(ap, vector int), (long)vec_tmp.l[0])) : \
+ 	    va_arg(ap, long int))
+ #define GET_ULONG(ap) \
+ 	(flags&VECTOR ? \
+-	    (vec_print_count < 4 ? (u_long)vec_tmp.l[4 - vec_print_count] : \
+-	        (vec_tmp.v = va_arg(ap, vector int), (u_long)vec_tmp.l[0])) : \
++	    (vec_print_count < 4 ? (u_long)(__uint32_t)vec_tmp.l[4 - vec_print_count] : \
++	        (vec_tmp.v = va_arg(ap, vector int), (u_long)(__uint32_t)vec_tmp.l[0])) : \
+ 	    (u_long)va_arg(ap, unsigned long int))
+ 
+ #define GET_INT(ap) \
+@@ -766,7 +768,7 @@ reswitch:	switch (ch) {
+                                     vec_print_count = 4;
+ 				    vec_tmp.v = va_arg(ap, vector int);
+                                   }
+-				_fpvalue = (_LONG_DOUBLE)k.f[4 - vec_print_count];
++				_fpvalue = (_LONG_DOUBLE)vec_tmp.f[4 - vec_print_count];
+ #endif /* __ALTIVEC__ */
+ 			} else {
+ 				_fpvalue = (_LONG_DOUBLE)va_arg(ap, double);
+diff --git newlib-4.6.0.20260123/newlib/libc/machine/powerpc/vfscanf.c newlib/newlib/libc/machine/powerpc/vfscanf.c
+index ccd290f..21bdfe2 100644
+--- newlib-4.6.0.20260123/newlib/libc/machine/powerpc/vfscanf.c
++++ newlib/newlib/libc/machine/powerpc/vfscanf.c
+@@ -164,7 +164,9 @@ typedef union
+ {
+   char c[16] __attribute__ ((__aligned__ (16)));
+   short h[8];
+-  long l[4];
++  /* The "l" vector modifier selects 32-bit elements (AltiVec PIM), so
++     these must not be "long", which is 64 bits on LP64.  */
++  __uint32_t l[4];
+   int i[4];
+   float f[4];
+ } vec_union;
+@@ -173,7 +175,7 @@ typedef union
+  * vfscanf
+  */
+ 
+-#define BufferEmpty (fp->_r <= 0 && __srefill(fp))
++#define BufferEmpty (fp->_r <= 0 && __srefill_r(rptr, fp))
+ 
+ #ifndef _REENT_ONLY
+ 
+@@ -233,7 +235,9 @@ __svfscanf_r (rptr, fp, fmt0, ap)
+   char last_space_char;         /* last white-space char eaten - needed for vec support */
+   int vec_read_count;           /* number of vector items to read separately */
+   int looped;                   /* has vector processing looped */
+-  u_long (*ccfn) () = 0;	/* conversion function (strtol/strtoul) */
++  /* conversion function (_strtol_r/_strtoul_r); a full prototype, since
++     "()" means "(void)" in C23.  */
++  u_long (*ccfn) (struct _reent *, const char *, char **, int) = 0;
+   char ccltab[256];		/* character class table for %[...] */
+   char buf[BUF];		/* buffer for numeric conversions */
+   vec_union vec_buf;
+@@ -249,6 +253,7 @@ __svfscanf_r (rptr, fp, fmt0, ap)
+   _LONG_DOUBLE *ldp;
+   double *dp;
+   long *lp;
++  __uint32_t *vlp;		/* vector "l" elements are 32 bits */
+ #ifndef _NO_LONGLONG
+   long long *llp;
+ #else
+@@ -386,13 +391,13 @@ __svfscanf_r (rptr, fp, fmt0, ap)
+ 	  /* FALLTHROUGH */
+ 	case 'd':
+ 	  type = CT_INT;
+-	  ccfn = (u_long (*)())_strtol_r;
++	  ccfn = (u_long (*) (struct _reent *, const char *, char **, int))_strtol_r;
+ 	  base = 10;
+ 	  break;
+ 
+ 	case 'i':
+ 	  type = CT_INT;
+-	  ccfn = (u_long (*)())_strtol_r;
++	  ccfn = (u_long (*) (struct _reent *, const char *, char **, int))_strtol_r;
+ 	  base = 0;
+ 	  break;
+ 
+@@ -514,7 +519,7 @@ __svfscanf_r (rptr, fp, fmt0, ap)
+ 	  if (isupper (c))
+ 	    flags |= LONG;
+ 	  type = CT_INT;
+-	  ccfn = (u_long (*)())_strtol_r;
++	  ccfn = (u_long (*) (struct _reent *, const char *, char **, int))_strtol_r;
+ 	  base = 10;
+ 	  break;
+ 	}
+@@ -542,7 +547,7 @@ __svfscanf_r (rptr, fp, fmt0, ap)
+ 		fp->_p++;
+ 	      else
+ #ifndef CYGNUS_NEC
+-	      if (__srefill (fp))
++	      if (__srefill_r (rptr, fp))
+ #endif
+ 		goto input_failure;
+ 	    }
+@@ -570,7 +575,7 @@ __svfscanf_r (rptr, fp, fmt0, ap)
+ 		    fp->_p++;
+ 		  else
+ #ifndef CYGNUS_NEC
+-		    if (__srefill (fp))
++		    if (__srefill_r (rptr, fp))
+ #endif
+ 		      goto input_failure;
+ 		}
+@@ -587,7 +592,7 @@ __svfscanf_r (rptr, fp, fmt0, ap)
+ 		    fp->_p++;
+ 		  else
+ #ifndef CYGNUS_NEC
+-		    if (__srefill (fp))
++		    if (__srefill_r (rptr, fp))
+ #endif
+ 		      goto input_failure;
+ 		}
+@@ -619,7 +624,7 @@ __svfscanf_r (rptr, fp, fmt0, ap)
+ 		      width -= n;
+ 		      fp->_p += n;
+ #ifndef CYGNUS_NEC
+-		      if (__srefill (fp))
++		      if (__srefill_r (rptr, fp))
+ 			{
+ #endif
+ 			  if (sum == 0)
+@@ -894,7 +899,7 @@ __svfscanf_r (rptr, fp, fmt0, ap)
+ 		fp->_p++;
+ 	      else
+ #ifndef CYGNUS_NEC
+-	      if (__srefill (fp))
++	      if (__srefill_r (rptr, fp))
+ #endif
+ 		break;		/* EOF */
+ 	    }
+@@ -934,10 +939,16 @@ __svfscanf_r (rptr, fp, fmt0, ap)
+ 	      else if (flags & LONG)
+ 		{
+ 		  if (!(flags & VECTOR))
+-		    lp = va_arg (ap, long *);
+-		  else if (!looped)
+-		    lp = vec_buf.l;
+-		  *lp++ = res;
++		    {
++		      lp = va_arg (ap, long *);
++		      *lp = res;
++		    }
++		  else
++		    {
++		      if (!looped)
++			vlp = vec_buf.l;
++		      *vlp++ = res;
++		    }
+ 		}
+ #ifndef _NO_LONGLONG
+ 	      else if (flags & LONGDBL)
+@@ -1078,7 +1089,7 @@ __svfscanf_r (rptr, fp, fmt0, ap)
+ 		fp->_p++;
+ 	      else
+ #ifndef CYGNUS_NEC
+-	      if (__srefill (fp))
++	      if (__srefill_r (rptr, fp))
+ #endif
+ 		break;		/* EOF */
+ 	    }
+@@ -1205,7 +1216,8 @@ __svfscanf_r (rptr, fp, fmt0, ap)
+       if (flags & VECTOR)
+ 	{
+ 	  int i;
+-	  unsigned long *vp = va_arg (ap, unsigned long *);
++	  /* The argument points to a 16-byte vector; copy exactly that.  */
++	  __uint32_t *vp = va_arg (ap, __uint32_t *);
+ 	  for (i = 0; i < 4; ++i)
+ 	    *vp++ = vec_buf.l[i];
+ 	  nassigned++;
+diff -u newlib-4.6.0.20260123/newlib/libc/include/sys/config.h newlib/newlib/libc/include/sys/config.h
+--- newlib-4.6.0.20260123/newlib/libc/include/sys/config.h
++++ newlib/newlib/libc/include/sys/config.h
+@@ -1,10 +1,20 @@
+ #ifndef __SYS_CONFIG_H__
+ #define __SYS_CONFIG_H__
+ 
++/* libxenon-toolchain note: this file is gitignored upstream (".gitignore"
++   matches "config.h"), so the newlib 4.6.0 import commit did not contain it
++   and the working tree held the newlib 3.1.0 copy instead.  This copy is the
++   3.1.0 file brought up to what the 4.6.0 sources consume: the
++   _WANT_REENT_BACKWARD_BINARY_COMPAT, _WANT_REENT_THREAD_LOCAL and
++   _WANT_USE_GDTOA mappings, the AMDGCN dynamic reent, and removal of the
++   dead _REENT_GLOBAL_ATEXIT / _REENT_GLOBAL_STDIO_STREAMS macros.  Replace it
++   with the upstream newlib-4.6.0 file when available; see
++   work-notes/s-newlib.md.  */
++
+ #include <machine/ieeefp.h>  /* floating point macros */
+ #include <sys/features.h>	/* POSIX defs */
+ 
+-#if defined(__aarch64__) || defined(__mips__)
++#ifdef __aarch64__
+ #define MALLOC_ALIGNMENT 16
+ #endif
+ 
+@@ -12,11 +22,6 @@
+ #define __DYNAMIC_REENT__
+ #endif
+ 
+-#ifdef __nvptx__
+-#define _READ_WRITE_RETURN_TYPE _ssize_t
+-#define _READ_WRITE_BUFSIZE_TYPE __size_t
+-#endif
+-
+ /* exceptions first */
+ #if defined(__H8500__) || defined(__W65__)
+ #define __SMALL_BITFIELDS
+@@ -26,7 +31,7 @@
+ #endif
+ 
+ /* 16 bit integer machines */
+-#if defined(__Z8001__) || defined(__Z8002__) || defined(__H8500__) || defined(__W65__) || defined (__mn10200__) || defined (__AVR__) || defined (__MSP430__)
++#if defined(__Z8001__) || defined(__Z8002__) || defined(__H8500__) || defined(__W65__) || defined (__mn10200__) || defined (__AVR__)
+ 
+ #undef INT_MAX
+ #undef UINT_MAX
+@@ -132,7 +137,7 @@
+ #endif
+ 
+ /* Configure small REENT structure for Xilinx MicroBlaze platforms */
+-#if defined (__MICROBLAZE__) && !defined(__rtems__)
++#if defined (__MICROBLAZE__)
+ #ifndef _REENT_SMALL
+ #define _REENT_SMALL
+ #endif
+@@ -167,7 +172,7 @@
+ #define __SMALL_BITFIELDS
+ 
+ #ifdef __MSP430X_LARGE__
+-#define _POINTER_INT __int20
++#define _POINTER_INT long
+ #else
+ #define _POINTER_INT int
+ #endif
+@@ -284,18 +289,6 @@
+ #endif
+ #endif
+ 
+-#ifdef _WANT_USE_LONG_TIME_T
+-#ifndef _USE_LONG_TIME_T
+-#define _USE_LONG_TIME_T
+-#endif
+-#endif
+-
+-#ifdef _WANT_USE_GDTOA
+-#ifndef _USE_GDTOA
+-#define _USE_GDTOA
+-#endif
+-#endif
+-
+ #ifdef _WANT_REENT_BACKWARD_BINARY_COMPAT
+ #ifndef _REENT_BACKWARD_BINARY_COMPAT
+ #define _REENT_BACKWARD_BINARY_COMPAT
+@@ -308,6 +301,18 @@
+ #endif
+ #endif
+ 
++#ifdef _WANT_USE_LONG_TIME_T
++#ifndef _USE_LONG_TIME_T
++#define _USE_LONG_TIME_T
++#endif
++#endif
++
++#ifdef _WANT_USE_GDTOA
++#ifndef _USE_GDTOA
++#define _USE_GDTOA
++#endif
++#endif
++
+ /* If _MB_EXTENDED_CHARSETS_ALL is set, we want all of the extended
+    charsets.  The extended charsets add a few functions and a couple
+    of tables of a few K each. */
