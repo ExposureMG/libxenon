@@ -1,8 +1,11 @@
 --- bzip2-1.0.8/Makefile	2019-07-13 18:50:05.000000000 +0100
-+++ free60-libs/Makefile	2026-10-28 14:30:38.518966517 +0000
-@@ -15,16 +15,16 @@
++++ free60-libs/Makefile	2026-10-29 13:49:15.789468847 +0000
+@@ -14,17 +14,19 @@
+ 
  SHELL=/bin/sh
  
++MACHDEP = -DXENON -m32 -mno-altivec -fno-pic -mpowerpc64 -mhard-float
++
  # To assist in cross-compiling
 -CC=gcc
 -AR=ar
@@ -22,7 +25,7 @@
  
  
  OBJS= blocksort.o  \
-@@ -35,7 +35,7 @@ OBJS= blocksort.o  \
+@@ -35,7 +37,7 @@ OBJS= blocksort.o  \
        decompress.o \
        bzlib.o
  
@@ -31,7 +34,7 @@
  
  bzip2: libbz2.a bzip2.o
  	$(CC) $(CFLAGS) $(LDFLAGS) -o bzip2 bzip2.o -L. -lbz2
-@@ -69,44 +69,16 @@ test: bzip2
+@@ -69,44 +71,16 @@ test: bzip2
  	cmp sample3.tst sample3.ref
  	@cat words3
  
