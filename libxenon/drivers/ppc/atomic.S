@@ -48,7 +48,7 @@ lock:
         lwsync
         blr
 2:
-        db16cyc
+        or 31,31,31
         b 1b
  
 .globl unlock

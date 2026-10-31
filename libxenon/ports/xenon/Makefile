@@ -19,7 +19,12 @@ INCLUDES = -I ../../drivers -I ../../include \
 
 # Note: -fwrapv is required since newer GCC versions optimize away
 # integer overflow/underflow UB which breaks things like edram init
-CFLAGS = -g -mcpu=cell -mtune=cell -Os \
+
+TARGET_CPU = cell
+
+xenon_target: TARGET_CPU = xenon
+
+CFLAGS = -g -mcpu=$(TARGET_CPU) -mtune=$(TARGET_CPU) -Os \
 	-maltivec \
 	-ffunction-sections -fdata-sections -fwrapv \
 	-Wall -Wno-format -Wno-attributes -I. -DBYTE_ORDER=BIG_ENDIAN \
@@ -34,7 +39,7 @@ LIBDIR32 = $(DEVKITXENON)/xenon/lib/32/
 CXXFLAGS = $(CFLAGS) -fpermissive -Wno-sign-compare -Werror=int-to-pointer-cast \
 	-Werror=pointer-to-int-cast -Wno-unknown-pragmas  -Wno-unused-value -Wno-unused-variable 
 
-AFLAGS = -Iinclude -m32 $(INCLUDES)
+AFLAGS = -Iinclude -m32 -Wa,--noexecstack $(INCLUDES)
 
 LIBOBJS = crti.o crtn.o \
 	../../startup/xenon/argv.o \
@@ -151,6 +156,11 @@ clean:
 
 libxenon.a: $(LIBOBJS)
 	ar rc $@ $(LIBOBJS)
+
+.PHONY: xenon_target
+xenon_target: clean
+	$(MAKE) TARGET_CPU=xenon libxenon.a
+
 
 install: libxenon.a
 	mkdir -p $(DEVKITXENON)/usr/lib/

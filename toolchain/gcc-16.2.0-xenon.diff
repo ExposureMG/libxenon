@@ -36,9 +36,18 @@ index 38f3d037a..f1ffeb7ed 100755
  		os=riscix1.2
  		;;
 diff --git gcc-16.2.0/gcc/config.gcc gcc/gcc/config.gcc
-index 743421768..4ced51ed3 100644
+index 743421768..1609e4926 100644
 --- gcc-16.2.0/gcc/config.gcc
 +++ gcc/gcc/config.gcc
+@@ -555,7 +555,7 @@ powerpc*-*-*)
+ 	extra_headers="${extra_headers} ppu_intrinsics.h spu2vmx.h vec_types.h si2vmx.h"
+ 	extra_headers="${extra_headers} amo.h"
+ 	case x$with_cpu in
+-	    xpowerpc64|xdefault64|x6[23]0|x970|xG5|xpower[3456789]|xpower1[01]|xfuture|xpower6x|xrs64a|xcell|xa2|xe500mc64|xe5500|xe6500)
++	    xpowerpc64|xdefault64|x6[23]0|x970|xG5|xpower[3456789]|xpower1[01]|xfuture|xpower6x|xrs64a|xcell|xxenon|xa2|xe500mc64|xe5500|xe6500)
+ 		cpu_is_64bit=yes
+ 		;;
+ 	esac
 @@ -3090,6 +3090,29 @@ powerpc*-*-freebsd*)
  		;;
  	esac
@@ -69,12 +78,45 @@ index 743421768..4ced51ed3 100644
  powerpc-*-netbsd*)
  	tm_file="${tm_file} elfos.h gnu-user.h ${nbsd_tm_file} freebsd-spec.h rs6000/sysv4.h rs6000/netbsd.h"
  	extra_options="${extra_options} netbsd.opt netbsd-elf.opt"
-@@ -4208,6 +4231,14 @@ if test x$with_cpu = x ; then
+@@ -3187,11 +3210,32 @@ powerpc*-*-linux*)
+ 		extra_options="${extra_options} rs6000/476.opt" ;;
+ 	    powerpc*-*-linux*altivec*)
+ 		tm_file="${tm_file} rs6000/linuxaltivec.h" ;;
++	    powerpc64-xenon-linux*)
++		# The Xbox 360 (Xenon) running Linux: -mcpu=xenon by default
++		# (see with_cpu below) and the VMX128 intrinsics.  The ABI is
++		# the Linux one; v32-v127 are all volatile here, since the
++		# unwinder has no columns for them (VMX128_HI_SAVED_P).
++		# 64-bit only, libraries in lib/ (t-xenon-linux).
++		extra_headers="${extra_headers} xenon_vmx.h"
++		tmake_file="${tmake_file} rs6000/t-xenon-linux" ;;
+ 	esac
+ 	case ${target} in
+ 	    *-linux*-musl*)
+ 		enable_secureplt=yes ;;
+ 	esac
++	case ${target} in
++	    powerpc64-xenon-linux*-musl*)
++		# musl's powerpc64 port supports the ELFv2 ABI only.
++		case ${with_abi} in
++		    "") with_abi=elfv2 ;;
++		    elfv2) ;;
++		    *)
++			echo "--with-abi=${with_abi} is not supported for ${target}: musl needs elfv2" 1>&2
++			exit 1
++			;;
++		esac
++		;;
++	esac
+ 	if test x${enable_secureplt} = xyes; then
+ 		tm_file="rs6000/secureplt.h ${tm_file}"
+ 	fi
+@@ -4208,6 +4252,14 @@ if test x$with_cpu = x ; then
      visium-*-*)
        with_cpu=gr5
        ;;
-+    powerpc64-xenon-elf*)
-+      # The Xbox 360 target defaults to its own CPU.
++    powerpc64-xenon-elf* | powerpc64-xenon-linux*)
++      # The Xbox 360 targets default to their own CPU.
 +      with_cpu=xenon
 +      ;;
 +    powerpc64-*-elf*)
@@ -84,7 +126,7 @@ index 743421768..4ced51ed3 100644
    esac
  
    # Avoid overriding --with-cpu-32 and --with-cpu-64 values.
-@@ -5885,7 +5916,8 @@ case "${target}" in
+@@ -5885,7 +5937,8 @@ case "${target}" in
  			| 476 | 476fp | 505 | 601 | 602 | 603 | 603e | ec603e \
  			| 604 | 604e | 620 | 630 | 740 | 750 | 7400 | 7450 \
  			| a2 | e300c[23] | 854[08] | e500mc | e500mc64 | e5500 | e6500 \
@@ -3353,7 +3395,7 @@ index 4af0955ec..873782746 100644
    int cr_size;			/* size to hold CR if not in fixed area */
    int vrsave_size;		/* size to hold VRSAVE */
 diff --git gcc-16.2.0/gcc/config/rs6000/rs6000-logue.cc gcc/gcc/config/rs6000/rs6000-logue.cc
-index c6f162a46..5840495b1 100644
+index c6f162a46..d307062e9 100644
 --- gcc-16.2.0/gcc/config/rs6000/rs6000-logue.cc
 +++ gcc/gcc/config/rs6000/rs6000-logue.cc
 @@ -174,6 +174,105 @@ first_altivec_reg_to_save (void)
@@ -3523,19 +3565,19 @@ index c6f162a46..5840495b1 100644
  		+---------------------------------------+
 -		| Save area for AltiVec registers (W)	| 24+P+A+L+X
 +		| Save area for VMX128 registers (Q)	| 24+P+A+L+X
-+		+---------------------------------------+
-+		| Save area for AltiVec registers (W)	| 24+P+A+L+X+Q
  		+---------------------------------------+
 -		| AltiVec alignment padding (Y)		| 24+P+A+L+X+W
-+		| AltiVec alignment padding (Y)		| 24+P+A+L+X+Q+W
++		| Save area for AltiVec registers (W)	| 24+P+A+L+X+Q
  		+---------------------------------------+
 -		| Save area for VRSAVE register (Z)	| 24+P+A+L+X+W+Y
-+		| Save area for VRSAVE register (Z)	| 24+P+A+L+X+Q+W+Y
++		| AltiVec alignment padding (Y)		| 24+P+A+L+X+Q+W
  		+---------------------------------------+
 -		| Save area for GP registers (G)	| 24+P+A+X+L+X+W+Y+Z
-+		| Save area for GP registers (G)	| 24+P+A+X+L+X+Q+W+Y+Z
++		| Save area for VRSAVE register (Z)	| 24+P+A+L+X+Q+W+Y
  		+---------------------------------------+
 -		| Save area for FP registers (F)	| 24+P+A+X+L+X+W+Y+Z+G
++		| Save area for GP registers (G)	| 24+P+A+X+L+X+Q+W+Y+Z
++		+---------------------------------------+
 +		| Save area for FP registers (F)	| 24+P+A+X+L+X+Q+W+Y+Z+G
  		+---------------------------------------+
  	old SP->| back chain to caller's caller		|
@@ -3908,7 +3950,47 @@ index c6f162a46..5840495b1 100644
    /* VRSAVE is a bit vector representing which AltiVec registers
       are used.  The OS uses this to determine which vector
       registers to save on a context switch.  We need to save
-@@ -4288,6 +4604,67 @@ emit_cfa_restores (rtx cfa_restores)
+@@ -4274,6 +4590,39 @@ offset_below_red_zone_p (HOST_WIDE_INT offset)
+ 		   : TARGET_32BIT ? -220 : -288);
+ }
+ 
++/* Restore the call-saved CR fields of an ELFv2 function that calls
++   __builtin_eh_return from their separate slots at INFO->ehcr_offset,
++   addressed through FRAME_REG_RTX + FRAME_OFF (rs6000_emit_epilogue).  */
++
++static void
++restore_elfv2_eh_cr_fields (rs6000_stack_t *info, rtx frame_reg_rtx,
++			    int frame_off, int reg_size, bool exit_func)
++{
++  int i, cr_off = info->ehcr_offset;
++
++  for (i = 0; i < 8; i++)
++    if (!call_used_or_fixed_reg_p (CR0_REGNO + i))
++      {
++	rtx reg = gen_rtx_REG (SImode, 0);
++	emit_insn (gen_frame_load (reg, frame_reg_rtx,
++				   cr_off + frame_off));
++
++	rtx_insn *insn = emit_insn (gen_movsi_to_cr_one
++				      (gen_rtx_REG (CCmode, CR0_REGNO + i),
++				       reg));
++
++	if (!exit_func && flag_shrink_wrap)
++	  {
++	    add_reg_note (insn, REG_CFA_RESTORE,
++			  gen_rtx_REG (SImode, CR0_REGNO + i));
++
++	    RTX_FRAME_RELATED_P (insn) = 1;
++	  }
++
++	cr_off += reg_size;
++      }
++}
++
+ /* Append CFA_RESTORES to any existing REG_NOTES on the last insn.  */
+ 
+ static void
+@@ -4288,6 +4637,67 @@ emit_cfa_restores (rtx cfa_restores)
    RTX_FRAME_RELATED_P (insn) = 1;
  }
  
@@ -3976,7 +4058,7 @@ index c6f162a46..5840495b1 100644
  /* Emit function epilogue as insns.  */
  
  void
-@@ -4547,6 +4924,32 @@ rs6000_emit_epilogue (enum epilogue_type epilogue_type)
+@@ -4547,6 +4957,32 @@ rs6000_emit_epilogue (enum epilogue_type epilogue_type)
  	  }
      }
  
@@ -4009,30 +4091,43 @@ index c6f162a46..5840495b1 100644
    /* Restore VRSAVE if we must do so before adjusting the stack.  */
    if (info->vrsave_size != 0
        && (ALWAYS_RESTORE_ALTIVEC_BEFORE_POP
-@@ -4575,6 +4978,33 @@ rs6000_emit_epilogue (enum epilogue_type epilogue_type)
+@@ -4575,6 +5011,70 @@ rs6000_emit_epilogue (enum epilogue_type epilogue_type)
        emit_insn (generate_set_vrsave (reg, info, 1));
      }
  
 +  /* With a frame pointer or a back chain restore, the stack is popped
 +     below before the exception handler data registers are loaded from
 +     their slots, which are below the red zone when the frame has a Xenon
-+     VMX128 area (always 1 KiB in a function calling __builtin_eh_return).
-+     Load them now, while the stack still covers them.  Nothing after
-+     this point changes r3-r6.  Only for frames with a VMX128 area, so
-+     that the code for every other CPU is unchanged (upstream has the same
-+     latent problem at -O0 for slots at -512 and below).  */
++     VMX128 area (always 1 KiB in a function calling __builtin_eh_return),
++     and in any big enough frame.  Load them now, while the stack still
++     covers them.  Nothing after this point changes r3-r6.  Only for
++     -mcpu=xenon (and frames with a VMX128 area), so that the code for
++     every other CPU is unchanged (upstream has the same latent problem at
++     -O0 for slots at -512 and below).  On Linux, where v64-v127 are never
++     saved (VMX128_HI_SAVED_P), a signal handler's frame may overwrite
++     the stack below the red zone at any time.  */
++  bool xenon_frame = info->vmx128_size != 0 || rs6000_cpu == PROCESSOR_XENON;
++  /* The register to load them through: FRAME_REG_RTX once a restore
++     above has set it up, else the frame pointer, which (as the stack
++     pointer at the end of the prologue) has the same FRAME_OFF to the top
++     of the frame.  A back chain restore with FRAME_REG_RTX still the
++     stack pointer keeps r1 until the final stack reset, so nothing is
++     loaded from below it there.  */
++  rtx early_reg = (frame_reg_rtx != sp_reg_rtx ? frame_reg_rtx
++		   : frame_pointer_needed_indeed ? hard_frame_pointer_rtx
++		   : NULL_RTX);
 +  bool eh_data_loaded = false;
 +  if (epilogue_type == EPILOGUE_TYPE_EH_RETURN
-+      && info->vmx128_size != 0
++      && xenon_frame
 +      && DEFAULT_ABI != ABI_V4
-+      && frame_reg_rtx != sp_reg_rtx
++      && early_reg != NULL_RTX
 +      && (use_backchain_to_restore_sp || frame_pointer_needed_indeed)
 +      && offset_below_red_zone_p (info->ehrd_offset))
 +    {
 +      for (i = 0; EH_RETURN_DATA_REGNO (i) != INVALID_REGNUM; ++i)
 +	{
 +	  unsigned int regno = EH_RETURN_DATA_REGNO (i);
-+	  rtx mem = gen_frame_mem_offset (reg_mode, frame_reg_rtx,
++	  rtx mem = gen_frame_mem_offset (reg_mode, early_reg,
 +					  info->ehrd_offset + frame_off
 +					  + reg_size * (int) i);
 +	  emit_move_insn (gen_rtx_REG (reg_mode, regno), mem);
@@ -4040,10 +4135,34 @@ index c6f162a46..5840495b1 100644
 +      eh_data_loaded = true;
 +    }
 +
++  /* If we exit by an out-of-line restore function on ABI_V4 then that
++     function will deallocate the stack, so we don't need to worry
++     about the unwinder restoring cr from an invalid stack frame
++     location.  */
++  bool exit_func = (!restoring_FPRs_inline
++		    || (!restoring_GPRs_inline
++			&& info->first_fp_reg_save == 64));
++
++  /* Likewise the separate CR field slots of an ELFv2 function calling
++     __builtin_eh_return (below the EH data slots), which are otherwise
++     restored after the pop.  */
++  bool ehcr_restored = false;
++  if (DEFAULT_ABI == ABI_ELFv2
++      && crtl->calls_eh_return
++      && xenon_frame
++      && early_reg != NULL_RTX
++      && (use_backchain_to_restore_sp || frame_pointer_needed_indeed)
++      && offset_below_red_zone_p (info->ehcr_offset))
++    {
++      restore_elfv2_eh_cr_fields (info, early_reg, frame_off,
++				  reg_size, exit_func);
++      ehcr_restored = true;
++    }
++
    insn = NULL_RTX;
    /* If we have a large stack frame, restore the old stack pointer
       using the backchain.  */
-@@ -4587,6 +5017,11 @@ rs6000_emit_epilogue (enum epilogue_type epilogue_type)
+@@ -4587,6 +5087,11 @@ rs6000_emit_epilogue (enum epilogue_type epilogue_type)
  	  if (DEFAULT_ABI == ABI_V4)
  	    frame_reg_rtx = gen_rtx_REG (Pmode, 11);
  
@@ -4055,7 +4174,7 @@ index c6f162a46..5840495b1 100644
  	  insn = emit_move_insn (frame_reg_rtx,
  				 gen_rtx_MEM (Pmode, sp_reg_rtx));
  	  frame_off = 0;
-@@ -4597,6 +5032,18 @@ rs6000_emit_epilogue (enum epilogue_type epilogue_type)
+@@ -4597,6 +5102,18 @@ rs6000_emit_epilogue (enum epilogue_type epilogue_type)
  	;
        else
  	{
@@ -4074,7 +4193,7 @@ index c6f162a46..5840495b1 100644
  	  insn = emit_move_insn (sp_reg_rtx, frame_reg_rtx);
  	  frame_reg_rtx = sp_reg_rtx;
  	}
-@@ -4611,7 +5058,7 @@ rs6000_emit_epilogue (enum epilogue_type epilogue_type)
+@@ -4611,7 +5128,7 @@ rs6000_emit_epilogue (enum epilogue_type epilogue_type)
        /* Prevent reordering memory accesses against stack pointer restore.  */
        else if (cfun->calls_alloca
  	       || offset_below_red_zone_p (-info->total_size))
@@ -4083,7 +4202,7 @@ index c6f162a46..5840495b1 100644
  
        insn = emit_insn (gen_add3_insn (frame_reg_rtx, hard_frame_pointer_rtx,
  				       GEN_INT (info->total_size)));
-@@ -4624,7 +5071,7 @@ rs6000_emit_epilogue (enum epilogue_type epilogue_type)
+@@ -4624,7 +5141,7 @@ rs6000_emit_epilogue (enum epilogue_type epilogue_type)
        /* Prevent reordering memory accesses against stack pointer restore.  */
        if (cfun->calls_alloca
  	  || offset_below_red_zone_p (-info->total_size))
@@ -4092,7 +4211,7 @@ index c6f162a46..5840495b1 100644
        insn = emit_insn (gen_add3_insn (sp_reg_rtx, sp_reg_rtx,
  				       GEN_INT (info->total_size)));
        frame_off = 0;
-@@ -4760,6 +5207,15 @@ rs6000_emit_epilogue (enum epilogue_type epilogue_type)
+@@ -4760,6 +5277,15 @@ rs6000_emit_epilogue (enum epilogue_type epilogue_type)
  	  }
      }
  
@@ -4108,7 +4227,55 @@ index c6f162a46..5840495b1 100644
    /* Restore VRSAVE if we have not done so already.  */
    if (!ALWAYS_RESTORE_ALTIVEC_BEFORE_POP
        && info->vrsave_size != 0
-@@ -4864,7 +5320,7 @@ rs6000_emit_epilogue (enum epilogue_type epilogue_type)
+@@ -4775,44 +5301,14 @@ rs6000_emit_epilogue (enum epilogue_type epilogue_type)
+       emit_insn (generate_set_vrsave (reg, info, 1));
+     }
+ 
+-  /* If we exit by an out-of-line restore function on ABI_V4 then that
+-     function will deallocate the stack, so we don't need to worry
+-     about the unwinder restoring cr from an invalid stack frame
+-     location.  */
+-  bool exit_func = (!restoring_FPRs_inline
+-		    || (!restoring_GPRs_inline
+-			&& info->first_fp_reg_save == 64));
+-
+   /* In the ELFv2 ABI we need to restore all call-saved CR fields from
+      *separate* slots if the routine calls __builtin_eh_return, so
+      that they can be independently restored by the unwinder.  Since
+      it is for CR fields restoring, it should be done for any epilogue
+      types (not EPILOGUE_TYPE_EH_RETURN specific).  */
+-  if (DEFAULT_ABI == ABI_ELFv2 && crtl->calls_eh_return)
+-    {
+-      int i, cr_off = info->ehcr_offset;
+-
+-      for (i = 0; i < 8; i++)
+-	if (!call_used_or_fixed_reg_p (CR0_REGNO + i))
+-	  {
+-	    rtx reg = gen_rtx_REG (SImode, 0);
+-	    emit_insn (gen_frame_load (reg, frame_reg_rtx,
+-				       cr_off + frame_off));
+-
+-	    insn = emit_insn (gen_movsi_to_cr_one
+-				(gen_rtx_REG (CCmode, CR0_REGNO + i), reg));
+-
+-	    if (!exit_func && flag_shrink_wrap)
+-	      {
+-		add_reg_note (insn, REG_CFA_RESTORE,
+-			      gen_rtx_REG (SImode, CR0_REGNO + i));
+-
+-		RTX_FRAME_RELATED_P (insn) = 1;
+-	      }
+-
+-	    cr_off += reg_size;
+-	  }
+-    }
++  if (DEFAULT_ABI == ABI_ELFv2 && crtl->calls_eh_return && !ehcr_restored)
++    restore_elfv2_eh_cr_fields (info, frame_reg_rtx, frame_off, reg_size,
++				exit_func);
+ 
+   /* Get the old lr if we saved it.  If we are restoring registers
+      out-of-line, then the out-of-line routines can do this for us.  */
+@@ -4864,7 +5360,7 @@ rs6000_emit_epilogue (enum epilogue_type epilogue_type)
  				     frame_off + RS6000_TOC_SAVE_SLOT));
  	}
  
@@ -4353,7 +4520,7 @@ index efc55260b..9bbdc7abd 100644
 +Enum(rs6000_cpu_opt_value) String(rs64) Value(59)
  
 diff --git gcc-16.2.0/gcc/config/rs6000/rs6000.cc gcc/gcc/config/rs6000/rs6000.cc
-index e60a99b64..62f3e1ada 100644
+index e60a99b64..959c1430e 100644
 --- gcc-16.2.0/gcc/config/rs6000/rs6000.cc
 +++ gcc/gcc/config/rs6000/rs6000.cc
 @@ -76,6 +76,7 @@
@@ -5959,7 +6126,7 @@ index e60a99b64..62f3e1ada 100644
    return (STRICT_ALIGNMENT
  	  || (!TARGET_EFFICIENT_UNALIGNED_VSX
  	      && ((SCALAR_FLOAT_MODE_NOT_VECTOR_P (mode) && align < 32)
-@@ -10325,9 +11588,66 @@ rs6000_conditional_register_usage (void)
+@@ -10325,9 +11588,83 @@ rs6000_conditional_register_usage (void)
  	for (i = FIRST_ALTIVEC_REGNO + 20; i < FIRST_ALTIVEC_REGNO + 32; ++i)
  	  fixed_regs[i] = call_used_regs[i] = 1;
      }
@@ -5990,6 +6157,23 @@ index e60a99b64..62f3e1ada 100644
 +	    call_used_regs[i] = 1;
 +	  }
 +      vmx128_call_saved_diagnosed = true;
++      /* Without the unwinder columns for v64-v127 (VMX128_HI_SAVED_P,
++	 e.g. on Linux) they are volatile by default; a -fcall-saved-vN
++	 for one of them would be saved by the prologue but not restored
++	 when an exception unwinds through the frame.  Reject it.  */
++      static bool vmx128_hi_call_saved_diagnosed = false;
++      if (!VMX128_HI_SAVED_P)
++	for (i = FIRST_SAVED_VMX128_REGNO; i <= LAST_VMX128_HI_REGNO; ++i)
++	  if (!fixed_regs[i] && !call_used_regs[i])
++	    {
++	      if (!vmx128_hi_call_saved_diagnosed)
++		error_at (UNKNOWN_LOCATION,
++			  "%<-fcall-saved-v%d%> is not supported on this "
++			  "target: its unwinder cannot restore v64-v127",
++			  VMX128_REGNUM (i));
++	      call_used_regs[i] = 1;
++	    }
++      vmx128_hi_call_saved_diagnosed = true;
 +      /* v64-v127 are callee-saved only in the AltiVec ABI, where the
 +	 prologue saves them like v20-v31 (rs6000-logue.cc); with
 +	 -mabi=no-altivec nothing saves vector registers, so make them
@@ -6026,7 +6210,7 @@ index e60a99b64..62f3e1ada 100644
  /* Output insns to set DEST equal to the constant SOURCE as a series of
     lis, ori and shl instructions and return TRUE.  */
  
-@@ -11048,11 +12368,81 @@ rs6000_emit_move (rtx dest, rtx source, machine_mode mode)
+@@ -11048,11 +12385,81 @@ rs6000_emit_move (rtx dest, rtx source, machine_mode mode)
        debug_rtx (source);
      }
  
@@ -6113,7 +6297,7 @@ index e60a99b64..62f3e1ada 100644
  #ifdef HAVE_AS_GNU_ATTRIBUTE
    /* If we use a long double type, set the flags in .gnu_attribute that say
       what the long double type is.  This is to allow the linker's warning
-@@ -12433,7 +13823,8 @@ rs6000_secondary_reload_memory (rtx addr,
+@@ -12433,7 +13840,8 @@ rs6000_secondary_reload_memory (rtx addr,
    else if (rclass == FLOAT_REGS)
      addr_mask = reg_addr[mode].addr_mask[RELOAD_REG_FPR];
  
@@ -6123,7 +6307,7 @@ index e60a99b64..62f3e1ada 100644
      addr_mask = reg_addr[mode].addr_mask[RELOAD_REG_VMX];
  
    /* For the combined VSX_REGS, turn off Altivec AND -16.  */
-@@ -12532,7 +13923,8 @@ rs6000_secondary_reload_memory (rtx addr,
+@@ -12532,7 +13940,8 @@ rs6000_secondary_reload_memory (rtx addr,
  	  extra_cost = -1;
  	}
  
@@ -6133,7 +6317,7 @@ index e60a99b64..62f3e1ada 100644
  	{
  	  if (legitimate_indirect_address_p (and_arg, false))
  	    extra_cost = 1;
-@@ -13207,7 +14599,8 @@ rs6000_secondary_reload_inner (rtx reg, rtx mem, rtx scratch, bool store_p)
+@@ -13207,7 +14616,8 @@ rs6000_secondary_reload_inner (rtx reg, rtx mem, rtx scratch, bool store_p)
    else if (IN_RANGE (regno, FIRST_FPR_REGNO, LAST_FPR_REGNO))
      addr_mask = reg_addr[mode].addr_mask[RELOAD_REG_FPR];
  
@@ -6143,7 +6327,7 @@ index e60a99b64..62f3e1ada 100644
      addr_mask = reg_addr[mode].addr_mask[RELOAD_REG_VMX];
  
    else
-@@ -13484,10 +14877,36 @@ rs6000_preferred_reload_class (rtx x, enum reg_class rclass)
+@@ -13484,10 +14894,36 @@ rs6000_preferred_reload_class (rtx x, enum reg_class rclass)
  
    /* If a mode can't go in FPR/ALTIVEC/VSX registers, don't return a preferred
       reload class for it.  */
@@ -6181,7 +6365,7 @@ index e60a99b64..62f3e1ada 100644
    if ((rclass == FLOAT_REGS || rclass == VSX_REGS)
        && (reg_addr[mode].addr_mask[RELOAD_REG_FPR] & RELOAD_REG_VALID) == 0)
      return NO_REGS;
-@@ -13740,6 +15159,13 @@ rs6000_secondary_reload_class (enum reg_class rclass, machine_mode mode,
+@@ -13740,6 +15176,13 @@ rs6000_secondary_reload_class (enum reg_class rclass, machine_mode mode,
        && rclass == ALTIVEC_REGS)
      return NO_REGS;
  
@@ -6195,7 +6379,7 @@ index e60a99b64..62f3e1ada 100644
    /* We can copy among the CR registers.  */
    if ((rclass == CR_REGS || rclass == CR0_REGS)
        && regno >= 0 && CR_REGNO_P (regno))
-@@ -13866,7 +15292,9 @@ rs6000_can_change_mode_class (machine_mode from,
+@@ -13866,7 +15309,9 @@ rs6000_can_change_mode_class (machine_mode from,
        return (from_size == 8 || from_size == 16);
      }
  
@@ -6206,7 +6390,7 @@ index e60a99b64..62f3e1ada 100644
        && (ALTIVEC_VECTOR_MODE (from) + ALTIVEC_VECTOR_MODE (to)) == 1)
      return false;
  
-@@ -13922,6 +15350,12 @@ rs6000_output_move_128bit (rtx operands[])
+@@ -13922,6 +15367,12 @@ rs6000_output_move_128bit (rtx operands[])
    bool dest_gpr_p, dest_fp_p, dest_vmx_p, dest_vsx_p;
    bool src_gpr_p, src_fp_p, src_vmx_p, src_vsx_p;
  
@@ -6219,7 +6403,7 @@ index e60a99b64..62f3e1ada 100644
    if (REG_P (dest))
      {
        dest_regno = REGNO (dest);
-@@ -17179,7 +18613,13 @@ rs6000_expand_atomic_compare_and_swap (rtx operands[], bool local)
+@@ -17179,7 +18630,13 @@ rs6000_expand_atomic_compare_and_swap (rtx operands[], bool local)
      }
    label2 = gen_rtx_LABEL_REF (VOIDmode, gen_label_rtx ());
  
@@ -6234,7 +6418,7 @@ index e60a99b64..62f3e1ada 100644
  
    x = retval;
    if (mask)
-@@ -18356,6 +19796,520 @@ rs6000_variable_issue (FILE *stream, int verbose, rtx_insn *insn, int more)
+@@ -18356,6 +19813,520 @@ rs6000_variable_issue (FILE *stream, int verbose, rtx_insn *insn, int more)
    return r;
  }
  
@@ -6755,7 +6939,7 @@ index e60a99b64..62f3e1ada 100644
  /* Adjust the cost of a scheduling dependency.  Return the new cost of
     a dependency LINK or INSN on DEP_INSN.  COST is the current cost.  */
  
-@@ -18368,6 +20322,9 @@ rs6000_adjust_cost (rtx_insn *insn, int dep_type, rtx_insn *dep_insn, int cost,
+@@ -18368,6 +20339,9 @@ rs6000_adjust_cost (rtx_insn *insn, int dep_type, rtx_insn *dep_insn, int cost,
    if (recog_memoized (insn) < 0 || recog_memoized (dep_insn) < 0)
      return cost;
  
@@ -6765,7 +6949,7 @@ index e60a99b64..62f3e1ada 100644
    switch (dep_type)
      {
      case REG_DEP_TRUE:
-@@ -18665,6 +20622,9 @@ is_microcoded_insn (rtx_insn *insn)
+@@ -18665,6 +20639,9 @@ is_microcoded_insn (rtx_insn *insn)
    if (rs6000_tune == PROCESSOR_CELL)
      return get_attr_cell_micro (insn) == CELL_MICRO_ALWAYS;
  
@@ -6775,7 +6959,7 @@ index e60a99b64..62f3e1ada 100644
    if (rs6000_sched_groups
        && (rs6000_tune == PROCESSOR_POWER4 || rs6000_tune == PROCESSOR_POWER5))
      {
-@@ -18957,6 +20917,17 @@ rs6000_issue_rate (void)
+@@ -18957,6 +20934,17 @@ rs6000_issue_rate (void)
      return 1;
  
    switch (rs6000_tune) {
@@ -6793,7 +6977,7 @@ index e60a99b64..62f3e1ada 100644
    case PROCESSOR_RS64A:
    case PROCESSOR_PPC601: /* ? */
    case PROCESSOR_PPC7450:
-@@ -19014,6 +20985,10 @@ rs6000_use_sched_lookahead (void)
+@@ -19014,6 +21002,10 @@ rs6000_use_sched_lookahead (void)
      case PROCESSOR_CELL:
        return (reload_completed ? 8 : 0);
  
@@ -6804,7 +6988,7 @@ index e60a99b64..62f3e1ada 100644
      default:
        return 0;
      }
-@@ -22502,6 +24477,15 @@ rs6000_rtx_costs (rtx x, machine_mode mode, int outer_code,
+@@ -22502,6 +24494,15 @@ rs6000_rtx_costs (rtx x, machine_mode mode, int outer_code,
        return false;
  
      case MULT:
@@ -6820,7 +7004,7 @@ index e60a99b64..62f3e1ada 100644
        if (CONST_INT_P (XEXP (x, 1))
  	  && satisfies_constraint_I (XEXP (x, 1)))
  	{
-@@ -22669,6 +24653,11 @@ rs6000_rtx_costs (rtx x, machine_mode mode, int outer_code,
+@@ -22669,6 +24670,11 @@ rs6000_rtx_costs (rtx x, machine_mode mode, int outer_code,
  	}
        else if (outer_code == AND)
  	*total = 0;
@@ -6832,7 +7016,7 @@ index e60a99b64..62f3e1ada 100644
        else
  	*total = COSTS_N_INSNS (1);
        return false;
-@@ -22830,6 +24819,17 @@ rs6000_insn_cost (rtx_insn *insn, bool speed)
+@@ -22830,6 +24836,17 @@ rs6000_insn_cost (rtx_insn *insn, bool speed)
  
    enum attr_type type = get_attr_type (insn);
  
@@ -6850,7 +7034,7 @@ index e60a99b64..62f3e1ada 100644
    switch (type)
      {
      case TYPE_LOAD:
-@@ -22969,6 +24969,13 @@ rs6000_register_move_cost (machine_mode mode,
+@@ -22969,6 +24986,13 @@ rs6000_register_move_cost (machine_mode mode,
    else if (to == DMR_REGS)
      ret = rs6000_dmr_register_move_cost (mode, from);
  
@@ -6864,7 +7048,7 @@ index e60a99b64..62f3e1ada 100644
    else if (!hard_reg_set_empty_p (to_vsx)
  	   && !hard_reg_set_empty_p (from_vsx)
  	   && (TARGET_VSX
-@@ -22986,7 +24993,8 @@ rs6000_register_move_cost (machine_mode mode,
+@@ -22986,7 +25010,8 @@ rs6000_register_move_cost (machine_mode mode,
    else if ((rclass = from, reg_classes_intersect_p (to, GENERAL_REGS))
  	   || (rclass = to, reg_classes_intersect_p (from, GENERAL_REGS)))
      {
@@ -6874,7 +7058,7 @@ index e60a99b64..62f3e1ada 100644
  	{
  	  if (TARGET_DIRECT_MOVE)
  	    {
-@@ -23007,6 +25015,14 @@ rs6000_register_move_cost (machine_mode mode,
+@@ -23007,6 +25032,14 @@ rs6000_register_move_cost (machine_mode mode,
  	      if (mode == SFmode)
  		ret += 2;
  	    }
@@ -6889,7 +7073,7 @@ index e60a99b64..62f3e1ada 100644
  	  else
  	    ret = (rs6000_memory_move_cost (mode, rclass, false)
  		   + rs6000_memory_move_cost (mode, GENERAL_REGS, false));
-@@ -23031,6 +25047,24 @@ rs6000_register_move_cost (machine_mode mode,
+@@ -23031,6 +25064,24 @@ rs6000_register_move_cost (machine_mode mode,
  	ret = 2 * hard_regno_nregs (FIRST_GPR_REGNO, mode);
      }
  
@@ -6914,7 +7098,7 @@ index e60a99b64..62f3e1ada 100644
    /* Everything else has to go through GENERAL_REGS.  */
    else
      ret = (rs6000_register_move_cost (mode, GENERAL_REGS, to)
-@@ -23066,6 +25100,12 @@ rs6000_memory_move_cost (machine_mode mode, reg_class_t rclass,
+@@ -23066,6 +25117,12 @@ rs6000_memory_move_cost (machine_mode mode, reg_class_t rclass,
    else if ((reg_classes_intersect_p (rclass, FLOAT_REGS)
  	    || reg_classes_intersect_p (rclass, VSX_REGS)))
      ret = 4 * hard_regno_nregs (32, mode);
@@ -6927,7 +7111,7 @@ index e60a99b64..62f3e1ada 100644
    else if (reg_classes_intersect_p (rclass, ALTIVEC_REGS))
      ret = 4 * hard_regno_nregs (FIRST_ALTIVEC_REGNO, mode);
    else if (reg_classes_intersect_p (rclass, DMR_REGS))
-@@ -23124,6 +25164,7 @@ rs6000_ira_change_pseudo_allocno_class (int regno ATTRIBUTE_UNUSED,
+@@ -23124,6 +25181,7 @@ rs6000_ira_change_pseudo_allocno_class (int regno ATTRIBUTE_UNUSED,
  			   || best_class == GEN_OR_FLOAT_REGS
  			   || best_class == VSX_REGS
  			   || best_class == ALTIVEC_REGS
@@ -6935,7 +7119,7 @@ index e60a99b64..62f3e1ada 100644
  			   || best_class == FLOAT_REGS
  			   || best_class == GENERAL_REGS
  			   || best_class == BASE_REGS);
-@@ -23134,11 +25175,36 @@ rs6000_ira_change_pseudo_allocno_class (int regno ATTRIBUTE_UNUSED,
+@@ -23134,11 +25192,36 @@ rs6000_ira_change_pseudo_allocno_class (int regno ATTRIBUTE_UNUSED,
  	return GENERAL_REGS;
        if (TARGET_VSX && best_class == FLOAT_REGS)
  	return VSX_REGS;
@@ -6972,7 +7156,7 @@ index e60a99b64..62f3e1ada 100644
  
      default:
        break;
-@@ -24270,7 +26336,9 @@ rs6000_compute_pressure_classes (enum reg_class *pressure_classes)
+@@ -24270,7 +26353,9 @@ rs6000_compute_pressure_classes (enum reg_class *pressure_classes)
  
    n = 0;
    pressure_classes[n++] = GENERAL_REGS;
@@ -6983,7 +7167,7 @@ index e60a99b64..62f3e1ada 100644
      pressure_classes[n++] = ALTIVEC_REGS;
    if (TARGET_VSX)
      pressure_classes[n++] = VSX_REGS;
-@@ -24344,6 +26412,33 @@ rs6000_initial_elimination_offset (int from, int to)
+@@ -24344,6 +26429,33 @@ rs6000_initial_elimination_offset (int from, int to)
  static void
  rs6000_init_dwarf_reg_sizes_extra (tree address)
  {
@@ -7017,7 +7201,7 @@ index e60a99b64..62f3e1ada 100644
    if (TARGET_MACHO && ! TARGET_ALTIVEC)
      {
        int i;
-@@ -24386,6 +26481,9 @@ rs6000_debugger_regno (unsigned int regno, unsigned int format)
+@@ -24386,6 +26498,9 @@ rs6000_debugger_regno (unsigned int regno, unsigned int format)
  	return regno - FIRST_FPR_REGNO + 32;
        if (ALTIVEC_REGNO_P (regno))
  	return regno - FIRST_ALTIVEC_REGNO + 1124;
@@ -7027,7 +7211,7 @@ index e60a99b64..62f3e1ada 100644
        if (regno == LR_REGNO)
  	return 108;
        if (regno == CTR_REGNO)
-@@ -24451,6 +26549,11 @@ rs6000_debugger_regno (unsigned int regno, unsigned int format)
+@@ -24451,6 +26566,11 @@ rs6000_debugger_regno (unsigned int regno, unsigned int format)
    if (DMR_REGNO_P (regno))
      return regno - FIRST_DMR_REGNO + 112;
  
@@ -7039,7 +7223,7 @@ index e60a99b64..62f3e1ada 100644
    gcc_unreachable ();
  }
  
-@@ -24711,6 +26814,7 @@ static struct rs6000_opt_mask const rs6000_opt_masks[] =
+@@ -24711,6 +26831,7 @@ static struct rs6000_opt_mask const rs6000_opt_masks[] =
    { "save-toc-indirect",	OPTION_MASK_SAVE_TOC_INDIRECT,	false, true  },
    { "string",			0,				false, true  },
    { "update",			OPTION_MASK_NO_UPDATE,		true , true  },
@@ -7047,7 +7231,7 @@ index e60a99b64..62f3e1ada 100644
    { "vsx",			OPTION_MASK_VSX,		false, true  },
  #ifdef OPTION_MASK_64BIT
  #if TARGET_AIX_OS
-@@ -24738,6 +26842,79 @@ static struct rs6000_opt_mask const rs6000_opt_masks[] =
+@@ -24738,6 +26859,79 @@ static struct rs6000_opt_mask const rs6000_opt_masks[] =
    { "string",			0,				false, false },
  };
  
@@ -7127,7 +7311,7 @@ index e60a99b64..62f3e1ada 100644
  /* Option variables that we want to support inside attribute((target)) and
     #pragma GCC target operations.  */
  
-@@ -25164,6 +27341,20 @@ rs6000_pragma_target_parse (tree args, tree pop_target)
+@@ -25164,6 +27358,20 @@ rs6000_pragma_target_parse (tree args, tree pop_target)
  	  rs6000_target_modify_macros_ptr (true,
  					   cur_flags & diff_flags);
  	}
@@ -7148,7 +7332,7 @@ index e60a99b64..62f3e1ada 100644
      }
  
    return true;
-@@ -26991,7 +29182,11 @@ reg_to_non_prefixed (rtx reg, machine_mode mode)
+@@ -26991,7 +29199,11 @@ reg_to_non_prefixed (rtx reg, machine_mode mode)
  
    /* Altivec registers use DS-mode for scalars, and DQ-mode for vectors, IEEE
       128-bit floating point, and 128-bit integers.  Before power9, only indexed
@@ -7161,7 +7345,7 @@ index e60a99b64..62f3e1ada 100644
    else if (ALTIVEC_REGNO_P (r))
      {
        if (!TARGET_P9_VECTOR)
-@@ -27634,7 +29829,7 @@ rs6000_split_multireg_move (rtx dst, rtx src)
+@@ -27634,7 +29846,7 @@ rs6000_split_multireg_move (rtx dst, rtx src)
    else if (FP_REGNO_P (reg))
      reg_mode = DECIMAL_FLOAT_MODE_P (mode) ? DDmode :
  	(TARGET_HARD_FLOAT ? DFmode : SFmode);
@@ -7171,7 +7355,7 @@ index e60a99b64..62f3e1ada 100644
    else
      reg_mode = word_mode;
 diff --git gcc-16.2.0/gcc/config/rs6000/rs6000.h gcc/gcc/config/rs6000/rs6000.h
-index d33cb6b7e..a3f5a596f 100644
+index d33cb6b7e..d074f13c1 100644
 --- gcc-16.2.0/gcc/config/rs6000/rs6000.h
 +++ gcc/gcc/config/rs6000/rs6000.h
 @@ -117,6 +117,7 @@
@@ -7259,7 +7443,7 @@ index d33cb6b7e..a3f5a596f 100644
  
  /* Use standard DWARF numbering for DWARF debugging information.  */
  #define DEBUGGER_REGNO(REGNO) rs6000_debugger_regno ((REGNO), 0)
-@@ -787,6 +836,16 @@ enum data_align { align_abi, align_opt, align_both };
+@@ -787,6 +836,24 @@ enum data_align { align_abi, align_opt, align_both };
  #define DWARF2_FRAME_REG_OUT(REGNO, FOR_EH) \
    rs6000_debugger_regno ((REGNO), (FOR_EH) ? 2 : 1)
  
@@ -7273,10 +7457,18 @@ index d33cb6b7e..a3f5a596f 100644
 +  VMX128_HI_REGS_INIT_32 (LO), VMX128_HI_REGS_INIT_32 (HI), \
 +  VMX128_HI_REGS_INIT_32 (HI)
 +
++/* True if v64-v127 are callee-saved (plan 4.3).  That needs an unwinder
++   with columns for them (.eh_frame 152-215), i.e. DWARF_FRAME_REGISTERS
++   above 215, as rs6000/xenon64.h has.  Every other target, Linux
++   (powerpc64-xenon-linux-musl) included, keeps the 119-column unwinder,
++   which could not restore them while unwinding, so there all of v32-v127
++   are volatile.  */
++#define VMX128_HI_SAVED_P (DWARF_FRAME_REGISTERS > 215)
++
  /* 1 for registers that have pervasive standard uses
     and are not available for the register allocator.
  
-@@ -812,7 +871,10 @@ enum data_align { align_abi, align_opt, align_both };
+@@ -812,7 +879,10 @@ enum data_align { align_abi, align_opt, align_both };
     /* vrsave vscr sfp */			   \
     1, 1, 1,					   \
     /* DMRs */					   \
@@ -7288,18 +7480,19 @@ index d33cb6b7e..a3f5a596f 100644
  }
  
  /* Like `CALL_USED_REGISTERS' except this macro doesn't require that
-@@ -838,7 +900,9 @@ enum data_align { align_abi, align_opt, align_both };
+@@ -838,7 +908,10 @@ enum data_align { align_abi, align_opt, align_both };
     /* vrsave vscr sfp */			   \
     0, 0, 0,					   \
     /* DMRs */					   \
 -   1, 1, 1, 1, 1, 1, 1, 1			   \
 +   1, 1, 1, 1, 1, 1, 1, 1,			   \
-+   /* VMX128: v32-v63 volatile, v64-v127 callee-saved (plan 4.3) */ \
-+   VMX128_HI_REGS_INIT (1, 0)			   \
++   /* VMX128: v32-v63 volatile, v64-v127 callee-saved (plan 4.3) \
++      where the unwinder covers them, else volatile */	   \
++   VMX128_HI_REGS_INIT (1, !VMX128_HI_SAVED_P)	   \
  }
  
  #define TOTAL_ALTIVEC_REGS	(LAST_ALTIVEC_REGNO - FIRST_ALTIVEC_REGNO + 1)
-@@ -878,7 +942,26 @@ enum data_align { align_abi, align_opt, align_both };
+@@ -878,7 +951,26 @@ enum data_align { align_abi, align_opt, align_both };
  	dmr0 - dmr7	(not saved)
  	vrsave, vscr	(fixed)
  	sfp		(fixed)
@@ -7327,7 +7520,7 @@ index d33cb6b7e..a3f5a596f 100644
  
  #if FIXED_R2 == 1
  #define MAYBE_R2_AVAILABLE
-@@ -912,11 +995,25 @@ enum data_align { align_abi, align_opt, align_both };
+@@ -912,11 +1004,25 @@ enum data_align { align_abi, align_opt, align_both };
     18, 17, 16, 15, 14, 13, LATE_R12				\
     97, 96,							\
     1, MAYBE_R2_FIXED 99, 98,					\
@@ -7353,7 +7546,7 @@ index d33cb6b7e..a3f5a596f 100644
     95, 94, 93, 92, 91, 90, 89, 88, 87, 86, 85, 84,		\
     /* DMRs */							\
     111, 112, 113, 114, 115, 116, 117, 118,			\
-@@ -924,6 +1021,13 @@ enum data_align { align_abi, align_opt, align_both };
+@@ -924,6 +1030,13 @@ enum data_align { align_abi, align_opt, align_both };
     110								\
  }
  
@@ -7367,7 +7560,7 @@ index d33cb6b7e..a3f5a596f 100644
  /* True if register is floating-point.  */
  #define FP_REGNO_P(N) ((N) >= 32 && (N) <= 63)
  
-@@ -943,6 +1047,21 @@ enum data_align { align_abi, align_opt, align_both };
+@@ -943,6 +1056,21 @@ enum data_align { align_abi, align_opt, align_both };
  /* True if register is an AltiVec register.  */
  #define ALTIVEC_REGNO_P(N) ((N) >= FIRST_ALTIVEC_REGNO && (N) <= LAST_ALTIVEC_REGNO)
  
@@ -7389,7 +7582,7 @@ index d33cb6b7e..a3f5a596f 100644
  /* True if register is a VSX register.  */
  #define VSX_REGNO_P(N) (FP_REGNO_P (N) || ALTIVEC_REGNO_P (N))
  
-@@ -952,18 +1071,21 @@ enum data_align { align_abi, align_opt, align_both };
+@@ -952,18 +1080,21 @@ enum data_align { align_abi, align_opt, align_both };
  /* Alternate name for any vector register supporting floating point, no matter
     which instruction set(s) are available.  */
  #define VFLOAT_REGNO_P(N) \
@@ -7414,7 +7607,7 @@ index d33cb6b7e..a3f5a596f 100644
  
  /* When setting up caller-save slots (MODE == VOIDmode) ensure we allocate
     enough space to account for vectors in FP regs.  However, TFmode/TDmode
-@@ -1009,11 +1131,36 @@ enum data_align { align_abi, align_opt, align_both };
+@@ -1009,11 +1140,36 @@ enum data_align { align_abi, align_opt, align_both };
  #define HARD_REGNO_RENAME_OK(SRC, DST) \
    (! ALTIVEC_REGNO_P (DST) || df_regs_ever_live_p (DST))
  
@@ -7452,7 +7645,7 @@ index d33cb6b7e..a3f5a596f 100644
  
  #define BRANCH_COST(speed_p, predictable_p) 3
  
-@@ -1076,7 +1223,18 @@ enum data_align { align_abi, align_opt, align_both };
+@@ -1076,7 +1232,18 @@ enum data_align { align_abi, align_opt, align_both };
     So make a class for registers valid as base registers.
  
     Also, cr0 is the only condition code register that can be used in
@@ -7472,7 +7665,7 @@ index d33cb6b7e..a3f5a596f 100644
  
  enum reg_class
  {
-@@ -1084,13 +1242,17 @@ enum reg_class
+@@ -1084,13 +1251,17 @@ enum reg_class
    BASE_REGS,
    GENERAL_REGS,
    FLOAT_REGS,
@@ -7490,7 +7683,7 @@ index d33cb6b7e..a3f5a596f 100644
    LINK_REGS,
    CTR_REGS,
    LINK_OR_CTR_REGS,
-@@ -1114,13 +1276,17 @@ enum reg_class
+@@ -1114,13 +1285,17 @@ enum reg_class
    "BASE_REGS",								\
    "GENERAL_REGS",							\
    "FLOAT_REGS",								\
@@ -7508,7 +7701,7 @@ index d33cb6b7e..a3f5a596f 100644
    "LINK_REGS",								\
    "CTR_REGS",								\
    "LINK_OR_CTR_REGS",							\
-@@ -1140,47 +1306,80 @@ enum reg_class
+@@ -1140,47 +1315,80 @@ enum reg_class
  #define REG_CLASS_CONTENTS						\
  {									\
    /* NO_REGS.  */							\
@@ -7615,7 +7808,7 @@ index d33cb6b7e..a3f5a596f 100644
  }
  
  /* The same information, inverted:
-@@ -1205,6 +1404,8 @@ enum r6000_reg_class_enum {
+@@ -1205,6 +1413,8 @@ enum r6000_reg_class_enum {
    RS6000_CONSTRAINT_wx,		/* FPR register for STFIWX */
    RS6000_CONSTRAINT_wA,		/* BASE_REGS if 64-bit.  */
    RS6000_CONSTRAINT_wD,		/* Accumulator registers.  */
@@ -7624,7 +7817,7 @@ index d33cb6b7e..a3f5a596f 100644
    RS6000_CONSTRAINT_MAX
  };
  
-@@ -1218,6 +1419,16 @@ extern enum reg_class rs6000_constraints[RS6000_CONSTRAINT_MAX];
+@@ -1218,6 +1428,16 @@ extern enum reg_class rs6000_constraints[RS6000_CONSTRAINT_MAX];
  #define VSX_REG_CLASS_P(CLASS)			\
    ((CLASS) == VSX_REGS || (CLASS) == FLOAT_REGS || (CLASS) == ALTIVEC_REGS)
  
@@ -7641,7 +7834,7 @@ index d33cb6b7e..a3f5a596f 100644
  /* Return whether a given register class targets general purpose registers.  */
  #define GPR_REG_CLASS_P(CLASS) ((CLASS) == GENERAL_REGS || (CLASS) == BASE_REGS)
  
-@@ -2090,7 +2301,104 @@ extern char rs6000_reg_names[][8];	/* register names (0 vs. %r0).  */
+@@ -2090,7 +2310,104 @@ extern char rs6000_reg_names[][8];	/* register names (0 vs. %r0).  */
    &rs6000_reg_names[115][0],	/* dmr4  */				\
    &rs6000_reg_names[116][0],	/* dmr5  */				\
    &rs6000_reg_names[117][0],	/* dmr6  */				\
@@ -7747,7 +7940,7 @@ index d33cb6b7e..a3f5a596f 100644
  }
  
  /* Table of additional register names to use in user input.  */
-@@ -2146,6 +2454,31 @@ extern char rs6000_reg_names[][8];	/* register names (0 vs. %r0).  */
+@@ -2146,6 +2463,31 @@ extern char rs6000_reg_names[][8];	/* register names (0 vs. %r0).  */
    {"vs60", 92}, {"vs61", 93}, {"vs62", 94}, {"vs63", 95},	\
    {"dmr0", 111}, {"dmr1", 112}, {"dmr2", 113}, {"dmr3", 114},   \
    {"dmr4", 115}, {"dmr5", 116}, {"dmr6", 117}, {"dmr7", 118},   \
@@ -7779,7 +7972,7 @@ index d33cb6b7e..a3f5a596f 100644
  }
  
  /* This is how to output an element of a case-vector that is relative.  */
-@@ -2177,6 +2510,10 @@ extern char rs6000_reg_names[][8];	/* register names (0 vs. %r0).  */
+@@ -2177,6 +2519,10 @@ extern char rs6000_reg_names[][8];	/* register names (0 vs. %r0).  */
  /* How to align the given loop. */
  #define LOOP_ALIGN(LABEL)  rs6000_loop_align(LABEL)
  
@@ -8313,6 +8506,21 @@ index dc5aa87c9..491059b56 100644
  	$(srcdir)/config/rs6000/a2.md \
  	$(srcdir)/config/rs6000/predicates.md \
  	$(srcdir)/config/rs6000/constraints.md \
+diff --git gcc-16.2.0/gcc/config/rs6000/t-xenon-linux gcc/gcc/config/rs6000/t-xenon-linux
+new file mode 100644
+index 000000000..89a441b0b
+--- /dev/null
++++ gcc/gcc/config/rs6000/t-xenon-linux
+@@ -0,0 +1,9 @@
++# powerpc64-xenon-linux*: 64-bit only (XENON_MUSL_PLAN.md D1).  Drop the
++# m64/m32 table of t-linux64, whose m64=../lib64 would put the libraries
++# beside, not with, musl's (ld-musl-powerpc64.so.1 searches /lib, then
++# /usr/local/lib and /usr/lib).  With no multilibs they go in lib/.
++
++MULTILIB_OPTIONS =
++MULTILIB_DIRNAMES =
++MULTILIB_EXTRA_OPTS =
++MULTILIB_OSDIRNAMES =
 diff --git gcc-16.2.0/gcc/config/rs6000/t-xenon64 gcc/gcc/config/rs6000/t-xenon64
 new file mode 100644
 index 000000000..e36b15b72
@@ -10795,10 +11003,10 @@ index 000000000..092cdb4c7
 +;; END GENERATED by tools/gen_xenon_sched.py
 diff --git gcc-16.2.0/gcc/config/rs6000/xenon64.h gcc/gcc/config/rs6000/xenon64.h
 new file mode 100644
-index 000000000..1229cf014
+index 000000000..9294ae72d
 --- /dev/null
 +++ gcc/gcc/config/rs6000/xenon64.h
-@@ -0,0 +1,425 @@
+@@ -0,0 +1,433 @@
 +/* Definitions for 64-bit PowerPC bare-metal ELF targets using newlib:
 +   powerpc64-xenon-elf (Xbox 360 "Xenon") and the generic powerpc64-*-elf.
 +   Copyright (C) 2012-2026 Free Software Foundation, Inc.
@@ -10828,8 +11036,9 @@ index 000000000..1229cf014
 +   is derived from rs6000/freebsd64.h with the operating-system parts
 +   removed.  The ABI is the 64-bit ELF ABI version 1 (ELFv1): function
 +   descriptors in .opd, the TOC pointer in r2, LP64, big-endian.  There is
-+   no dynamic linker and no shared library support; executables are linked
-+   statically.  The C library is newlib; the board support library
++   no dynamic linker; executables are linked statically.  -shared builds
++   self-contained shared objects such as the Linux vDSO (normally with
++   -nostdlib).  The C library is newlib; the board support library
 +   (libxenon) supplies crt0.o and the system calls.
 +
 +   -m64 is the default.  -m32 is a multilib (libxenon is built -m32
@@ -10965,11 +11174,14 @@ index 000000000..1229cf014
 +#define LINK_OS_DEFAULT_SPEC \
 +  "%{m32:%(link_os_spec32)}%{!m32:%(link_os_spec64)}"
 +
-+/* Static linking only: no shared libraries, no dynamic linker.  */
++/* Static linking by default; there is no dynamic linker.  -shared (or
++   -symbolic) makes an ET_DYN object for whoever maps it: the Linux kernel
++   links its vDSO with "-nostdlib -shared".  newlib is not PIC for -m32,
++   so a -m32 shared object that pulls in libc gets text relocations.  */
 +#undef  LINK_SHLIB_SPEC
 +#define LINK_SHLIB_SPEC \
-+  "%{shared|symbolic:%eshared libraries are not supported on this target} \
-+   %{!r:-static}"
++  "%{shared:-shared} %{symbolic:-shared -Bsymbolic} \
++   %{!shared:%{!symbolic:%{!r:-static}}}"
 +
 +/* No default load address: the image is placed by the linker script
 +   (-T) of the board support package; ld's elf64ppc default script
@@ -10979,12 +11191,16 @@ index 000000000..1229cf014
 +
 +/* newlib start files.  The board support library (libxenon) supplies
 +   crt0.o (the entry point); libgcc supplies crti.o/crtn.o (the _init and
-+   _fini frames newlib's __libc_init_array calls) and crtbegin.o/crtend.o.  */
++   _fini frames newlib's __libc_init_array calls) and crtbegin.o/crtend.o.
++   A shared object has no entry point (no crt0.o) and takes the PIC
++   crtbeginS.o/crtendS.o.  */
 +#undef	STARTFILE_DEFAULT_SPEC
-+#define	STARTFILE_DEFAULT_SPEC "%:if-exists(crt0%O%s) crti%O%s crtbegin%O%s"
++#define	STARTFILE_DEFAULT_SPEC \
++  "%{!shared:%:if-exists(crt0%O%s)} crti%O%s \
++   %{shared:crtbeginS%O%s;:crtbegin%O%s}"
 +
 +#undef	ENDFILE_DEFAULT_SPEC
-+#define	ENDFILE_DEFAULT_SPEC "crtend%O%s crtn%O%s"
++#define	ENDFILE_DEFAULT_SPEC "%{shared:crtendS%O%s;:crtend%O%s} crtn%O%s"
 +
 +#undef	LIB_DEFAULT_SPEC
 +#define	LIB_DEFAULT_SPEC "-lc"
@@ -17891,10 +18107,10 @@ index 000000000..fbeef73de
 +OP1 (expte_f, vec_expte (a))
 +OP1 (loge_f, vec_loge (a))
 diff --git gcc-16.2.0/libgcc/config.host gcc/libgcc/config.host
-index ac10ccc43..174505567 100644
+index ac10ccc43..3034f5f90 100644
 --- gcc-16.2.0/libgcc/config.host
 +++ gcc/libgcc/config.host
-@@ -1237,6 +1237,22 @@ powerpc*-*-freebsd*)
+@@ -1237,6 +1237,23 @@ powerpc*-*-freebsd*)
  	  ;;
  	esac
  	;;
@@ -17904,7 +18120,8 @@ index ac10ccc43..174505567 100644
 +	# out-of-line save/restore routines are generated by GNU ld
 +	# (t-savresfgpr builds the 32-bit ones for the -m32 multilib).
 +	# No md_unwind_header: there are no signal frames to unwind.
-+	tmake_file="${tmake_file} rs6000/t-ppccomm rs6000/t-savresfgpr rs6000/t-crtstuff rs6000/t-ppc64-fp rs6000/t-xenon64"
++	# crtbeginS.o/crtendS.o are for -shared (e.g. the Linux vDSO).
++	tmake_file="${tmake_file} rs6000/t-ppccomm rs6000/t-savresfgpr rs6000/t-crtstuff t-crtstuff-pic rs6000/t-ppc64-fp rs6000/t-xenon64"
 +	case ${host} in
 +	powerpc64-xenon-elf*)
 +		# The Xbox 360 PPE: libgcc and the crt files are always
@@ -17912,7 +18129,7 @@ index ac10ccc43..174505567 100644
 +		tmake_file="${tmake_file} rs6000/t-xenon64-cpu"
 +		;;
 +	esac
-+	extra_parts="$extra_parts crti.o crtn.o"
++	extra_parts="$extra_parts crti.o crtn.o crtbeginS.o crtendS.o"
 +	;;
  powerpc-*-netbsd*)
  	tmake_file="$tmake_file rs6000/t-netbsd rs6000/t-crtstuff"

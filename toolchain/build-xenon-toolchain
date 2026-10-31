@@ -4,6 +4,7 @@
 # changed for xenon by Felix Domke <tmbinc@elitedvb.net>, still public domain
 
 TARGET=xenon
+GCC_CPU="cell"
 PREFIX="${PREFIX:-/usr/local/xenon}" # Install location of your final toolchain.
 PARALLEL=${PARALLEL:--j$(nproc --all)}
 
@@ -11,6 +12,7 @@ BINU_VER="2.47"
 GCC_VER="16.2.0"
 NEWL_VER="4.6.0.20260123"
 GCC_EXTRA_CFG=""
+NEWLIB_EXTRA_CFG=() # array, so values with spaces (CFLAGS_FOR_TARGET=...) stay one argument
 
 ZLIB_DL="https://zlib.net/fossils/zlib-1.3.2.tar.gz"
 LIBPNG_DL="https://download.sourceforge.net/libpng/libpng-1.6.59.tar.xz"
@@ -91,7 +93,7 @@ libxenon_install()
     check_priv "$@"
     echo -e "Building libxenon..."
     make -C ../libxenon/ports/xenon clean >> $LOGFILE 2>&1 || fail_with_info
-    make $PARALLEL -C ../libxenon/ports/xenon libxenon.a >> $LOGFILE 2>&1 || fail_with_info
+    make $PARALLEL -C ../libxenon/ports/xenon TARGET_CPU=$GCC_CPU libxenon.a >> $LOGFILE 2>&1 || fail_with_info
     make -C ../libxenon/ports/xenon install >> $LOGFILE 2>&1 || fail_with_info
     echo
     echo -e "libxenon installed successfully"
@@ -234,11 +236,16 @@ toolchain_install()
         cd build-gcc
         echo -e "Configuring $GCC..."
         unset LIBRARY_PATH
-        ../$GCC/configure --target=$TARGET --prefix="$PREFIX" --with-libiconv-prefix=/opt/local --with-cpu=$GCC_CPU \
-            $GCC_EXTRA_CFG --with-gmp=/opt/local --with-mpfr=/opt/local --disable-decimal-float --disable-libquadmath \
-            --enable-languages=c,c++ --disable-libssp --disable-libsanitizer --with-newlib --enable-cxx-flags="-G0" \
-            --disable-libmudflap --disable-nls --disable-shared --disable-linux-futex --enable-altivec \
-            --disable-libatomic --disable-threads --disable-libgomp --disable-libitm --disable-libstdcxx-time --disable-initfini-array -v >> $LOGFILE 2>&1 || fail_with_info
+        ../$GCC/configure --target=$TARGET --prefix="$PREFIX" \
+        --with-libiconv-prefix=/opt/local --with-gmp=/opt/local --with-mpfr=/opt/local \
+        --with-cpu=$GCC_CPU --with-newlib \
+        --enable-languages=c,c++ --enable-cxx-flags="-G0" --enable-altivec \
+        --disable-threads --disable-shared --disable-decimal-float --disable-libquadmath \
+        --disable-libssp --disable-libsanitizer --disable-libmudflap --disable-nls \
+        --disable-linux-futex --disable-libatomic --disable-libgomp --disable-libitm \
+        --disable-libstdcxx-time --disable-initfini-array $GCC_EXTRA_CFG \
+        -v >> $LOGFILE 2>&1 || fail_with_info
+
         echo -e "Building $GCC (compiler only), this could take a while..."
         make $PARALLEL MAKEINFO=true all-gcc >> $LOGFILE 2>&1 || fail_with_info
         echo -e "Installing $GCC (compiler only)..."
@@ -258,7 +265,7 @@ toolchain_install()
         cd build-newlib
         echo -e "Configuring $NEWLIB..."
         ../$NEWLIB/configure --target=$TARGET --prefix="$PREFIX"  --enable-multilib --disable-nls \
-            CFLAGS="-DHAVE_BLKSIZE -O2" $NEWLIB_EXTRA_CFG \
+            CFLAGS="-DHAVE_BLKSIZE -O2" "${NEWLIB_EXTRA_CFG[@]}" \
             --enable-newlib-io-long-long --enable-newlib-io-long-double >> $LOGFILE 2>&1 || fail_with_info
         echo -e "Building $NEWLIB, this could take a while..."
         make $PARALLEL >> $LOGFILE 2>&1 || fail_with_info
@@ -303,7 +310,7 @@ zlib_install()
 
     export TARGET_SAVE=$TARGET
     export CC=$TARGET-gcc
-    export CFLAGS="-mcpu=cell -mtune=cell -m32 -fno-pic -mpowerpc64 -Wno-error -L$DEVKITXENON/xenon/lib/32/ -T$DEVKITXENON/app.lds -u read -u _start -u exc_base -L$DEVKITXENON/usr/lib -I$DEVKITXENON/usr/include"
+    export CFLAGS="-mcpu=$GCC_CPU -mtune=$GCC_CPU -m32 -fno-pic -mpowerpc64 -Wno-error -L$DEVKITXENON/xenon/lib/32/ -T$DEVKITXENON/app.lds -u read -u _start -u exc_base -L$DEVKITXENON/usr/lib -I$DEVKITXENON/usr/include"
     export LDFLAGS="${CFLAGS//-T$DEVKITXENON\/app.lds/} -lxenon" # avoid duplicate -T
     export TARGET=`gcc -v 2>&1 | sed -n '2p' | awk '{print $2}'`
 
@@ -342,7 +349,7 @@ libpng_install()
     cd $LIBPNG
 
     export CC=$TARGET-gcc
-    export CFLAGS="-mcpu=cell -mtune=cell -m32 -fno-pic -mpowerpc64 $DEVKITXENON/usr/lib/libxenon.a -L$DEVKITXENON/xenon/lib/32 -T$DEVKITXENON/app.lds -u read -u _start -u exc_base -L$DEVKITXENON/usr/lib -I$DEVKITXENON/usr/include"
+    export CFLAGS="-mcpu=$GCC_CPU -mtune=$GCC_CPU -m32 -fno-pic -mpowerpc64 $DEVKITXENON/usr/lib/libxenon.a -L$DEVKITXENON/xenon/lib/32 -T$DEVKITXENON/app.lds -u read -u _start -u exc_base -L$DEVKITXENON/usr/lib -I$DEVKITXENON/usr/include"
     export LDFLAGS="${CFLAGS//-T$DEVKITXENON\/app.lds/}"
     export CPPFLAGS="-I$DEVKITXENON/usr/include" # pnglibconf generation only sees CPPFLAGS
 
@@ -409,7 +416,7 @@ freetype_install()
     cd $FREETYPE
 
     export CC=$TARGET-gcc
-    export CFLAGS="-mcpu=cell -mtune=cell -m32 -fno-pic -mpowerpc64 $DEVKITXENON/usr/lib/libxenon.a -L$DEVKITXENON/xenon/lib/32/ -T$DEVKITXENON/app.lds -u read -u _start -u exc_base -L$DEVKITXENON/usr/lib -I$DEVKITXENON/usr/include"
+    export CFLAGS="-mcpu=$GCC_CPU -mtune=$GCC_CPU -m32 -fno-pic -mpowerpc64 $DEVKITXENON/usr/lib/libxenon.a -L$DEVKITXENON/xenon/lib/32/ -T$DEVKITXENON/app.lds -u read -u _start -u exc_base -L$DEVKITXENON/usr/lib -I$DEVKITXENON/usr/include"
     export LDFLAGS="${CFLAGS//-T$DEVKITXENON\/app.lds/}"
 
     echo -e "Configuring $FREETYPE..."
@@ -527,6 +534,13 @@ all_done()
 # start
 rm -f $LOGFILE
 
+# Lib-only runs: target the CPU the installed compiler was configured for
+# (--with-cpu), so libxenon and the ports match the toolchain.
+if [ "$1" != "all" ] && [ "$1" != "toolchain" ] && [ -x "$PREFIX/bin/$TARGET-gcc" ]; then
+    GCC_CPU=$("$PREFIX/bin/$TARGET-gcc" -v 2>&1 | grep -o -- '--with-cpu=[^ ]*' | cut -d= -f2)
+    GCC_CPU=${GCC_CPU:-cell}
+fi
+
 if [ "$1" == "all" ] || [ "$1" == "toolchain" ]; then
     if [ "$FREE60_DOCKER_BUILD" = "true" ]; then
         echo "Info: running in Docker, not installing dependencies."
@@ -582,7 +596,8 @@ if [ "$1" == "all" ] || [ "$1" == "toolchain" ]; then
             NEWL_VER="4.6.0.20260123"
             VMX_MODE="xenon-target"
             GCC_CPU="xenon"
-            NEWLIB_EXTRA_CFG="--disable-newlib-supplied-syscalls" # libxenon provides the syscalls
+            NEWLIB_EXTRA_CFG=(CFLAGS_FOR_TARGET="-O2 -g -mcpu=xenon" --disable-newlib-supplied-syscalls --enable-newlib-io-c99-formats)
+            GCC_EXTRA_CFG="--with-sysroot=$PREFIX/xenon --with-native-system-header-dir=/include --disable-tls --disable-libstdcxx-pch"
             ;;
         16.2.0*)
             BINU_VER="2.47"

@@ -574,7 +574,7 @@ user_segfault_handler:
 	addi %r8,%r8,HV_CONTEXT_SIZE
 	mtsprg1 %r8
 	
-	mfpir %r3
+	mfspr %r3, 1023 /* PIR */
 	mfsrr0 %r4
 	mfdar %r5
 	
@@ -774,7 +774,7 @@ dump_from_pagefault:
 	std %r4, OFF_REG(REG_SRR1)(%r31)
 	mfdar %r4
 	std %r4, OFF_REG(REG_DAR)(%r31)
-	mfpir %r4
+	mfspr %r4, 1023 /* PIR */
 	std %r4, OFF_REG(REG_PIR)(%r31)
 
 	lis %r4,crashdump@h
@@ -792,7 +792,7 @@ dump_from_pagefault:
 	rfid
 
 putc:
-/*	mfpir %r4
+/*	mfspr %r4, 1023
 	cmplwi %r4,0
 	bnelr*/
 

@@ -46,6 +46,7 @@
 	********************************************************************* */
 
 #include <input/input.h>
+#include <sys/types.h>
 #include "cfe.h"
 #include <xenon_smc/xenon_smc.h>
 
