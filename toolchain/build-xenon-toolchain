@@ -13,6 +13,15 @@ GCC_VER="16.2.0"
 NEWL_VER="4.6.0.20260123"
 GCC_EXTRA_CFG=""
 NEWLIB_EXTRA_CFG=() # array, so values with spaces (CFLAGS_FOR_TARGET=...) stay one argument
+VARIANT=""          # "", "xenon" or "vmx128", set from the command line
+
+# Linux (musl) toolchain, built alongside the xenon variant
+MUSL_TARGET=powerpc64-xenon-linux-musl
+MUSL_SYSROOT="$PREFIX/$MUSL_TARGET"
+MUSL_DL="https://musl.libc.org/releases/musl-1.2.5.tar.gz"
+LINUX_DL="https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.tar.xz" # headers only
+MUSL=$(basename $MUSL_DL .tar.gz)
+LINUX=$(basename $LINUX_DL .tar.xz)
 
 ZLIB_DL="https://zlib.net/fossils/zlib-1.3.2.tar.gz"
 LIBPNG_DL="https://download.sourceforge.net/libpng/libpng-1.6.59.tar.xz"
@@ -30,6 +39,7 @@ BUILD_BINUTILS=true
 BUILD_GCC=true
 BUILD_NEWLIB=true
 BUILD_GCC_SECOND=true
+BUILD_MUSL="${BUILD_MUSL:-true}" # xenon variant only; BUILD_MUSL=false skips it
 
 # fancy progress bar
 EXTR=cat
@@ -74,7 +84,7 @@ fail_with_info()
 
 patch_newlib()
 {
-    if [ "$VMX_MODE" == "xenon-target" ]; then
+    if [ "$VARIANT" == "xenon" ]; then
         if [ -f $NEWLIB-xenon.diff ]; then
             echo -e "Applying newlib xenon target patches..."
             patch --batch -p1 -d $NEWLIB < $NEWLIB-xenon.diff >> $LOGFILE 2>&1 || fail_with_info
@@ -100,7 +110,7 @@ libxenon_install()
     echo
 }
 
-toolchain_install()
+toolchain_sources()
 {
     # TEMPORARY: Use mirrors for GNU/Savannah projects due to upstream technical issues
     # TODO: sig/sha256 verify when downloading from mirrors
@@ -114,25 +124,86 @@ toolchain_install()
     BINUTILS=$(basename $BINUTILS_DL .tar.gz)
     GCC=$(basename $GCC_DL .tar.gz)
     NEWLIB=$(basename $NEWLIB_DL .tar.gz)
+}
 
+# download $1 unless the file $2 is already here
+fetch()
+{
+    if [ ! -f "$2" ]; then
+        echo -e "Downloading $2"
+        wget -c "$1" || fail_with_info
+    fi
+}
+
+prepare_binutils_src()
+{
+        rm -rf $BINUTILS
+        mkdir $BINUTILS
+        echo -e "Extracting $BINUTILS..."
+        $EXTR $BINUTILS.tar.gz | tar xfz - >> $LOGFILE 2>&1 || fail_with_info
+
+        if [ "$VARIANT" == "vmx128" ]; then
+            if [ -f $BINUTILS-vmx128.diff ]; then
+                cat $BINUTILS.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
+                echo -e "Applying vmx128 support..."
+                cat $BINUTILS-vmx128.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
+            else
+                cat $BINUTILS.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
+                echo -e "No vmx128 diff found for binutils version $BINU_VER."
+                exit 1
+            fi
+        elif [ "$VARIANT" == "xenon" ]; then
+            if [ -f $BINUTILS-xenon.diff ]; then
+                echo -e "Applying xenon target patches..."
+                patch --batch -p1 -d $BINUTILS < $BINUTILS-xenon.diff >> $LOGFILE 2>&1 || fail_with_info
+            else
+                echo -e "No xenon target patch found for binutils version $BINU_VER."
+                exit 1
+            fi
+        else
+            cat $BINUTILS.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
+        fi
+}
+
+prepare_gcc_src()
+{
+        rm -rf $GCC
+        mkdir $GCC
+        echo -e "Extracting $GCC..."
+        $EXTR $GCC.tar.gz | tar xfz - >> $LOGFILE 2>&1 || fail_with_info
+
+        if [ "$VARIANT" == "vmx128" ]; then
+            cat $GCC.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
+            if [ -f $GCC-vmx128.diff ]; then
+                echo -e "Applying vmx128 support..."
+                cat $GCC-vmx128.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
+            else
+                echo -e "No vmx128 diff found for gcc version $GCC_VER."
+                exit 1
+            fi
+        elif [ "$VARIANT" == "xenon" ]; then
+            if [ -f $GCC-xenon.diff ]; then
+                echo -e "Applying xenon target patches..."
+                patch --batch -p1 -d $GCC < $GCC-xenon.diff >> $LOGFILE 2>&1 || fail_with_info
+            else
+                echo -e "No xenon target patch found for gcc version $GCC_VER."
+                exit 1
+            fi
+        else
+            cat $GCC.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
+        fi
+}
+
+toolchain_install()
+{
+    toolchain_sources
     check_priv "$@"
     chown -R `whoami`:`whoami` "$PREFIX"
 
     # Check if sources are available, download if needed
-    if [ ! -f $BINUTILS.tar.gz ]; then
-            echo -e "Downloading $BINUTILS"
-            wget -c $BINUTILS_DL || fail_with_info
-    fi
-
-    if [ ! -f $GCC.tar.gz ]; then
-            echo -e "Downloading $GCC"
-            wget -c $GCC_DL || fail_with_info
-    fi
-
-    if [ ! -f $NEWLIB.tar.gz ]; then
-            echo -e "Downloading $NEWLIB"
-            wget -c $NEWLIB_DL || fail_with_info
-    fi
+    fetch $BINUTILS_DL $BINUTILS.tar.gz
+    fetch $GCC_DL $GCC.tar.gz
+    fetch $NEWLIB_DL $NEWLIB.tar.gz
 
     # gcc keeps its own build dir: all-gcc is built before newlib, the
     # target libraries are finished in the same dir after newlib
@@ -144,32 +215,7 @@ toolchain_install()
     fi
 
     if $BUILD_BINUTILS; then
-        rm -rf $BINUTILS
-        mkdir $BINUTILS
-        echo -e "Extracting $BINUTILS..."
-        $EXTR $BINUTILS.tar.gz | tar xfz - >> $LOGFILE 2>&1 || fail_with_info
-
-        if [ "$VMX_MODE" == "vmx128" ]; then
-            if [ -f $BINUTILS-vmx128.diff ]; then
-                cat $BINUTILS.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
-                echo -e "Applying vmx128 support..."
-                cat $BINUTILS-vmx128.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
-            else
-                cat $BINUTILS.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
-                echo -e "No vmx128 diff found for binutils version $BINU_VER."
-                exit 1
-            fi
-        elif [ "$VMX_MODE" == "xenon-target" ]; then
-            if [ -f $BINUTILS-xenon.diff ]; then
-                echo -e "Applying xenon target patches..."
-                patch --batch -p1 -d $BINUTILS < $BINUTILS-xenon.diff >> $LOGFILE 2>&1 || fail_with_info
-            else
-                echo -e "No xenon target patch found for binutils version $BINU_VER."
-                exit 1
-            fi
-        else
-            cat $BINUTILS.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
-        fi
+        prepare_binutils_src
 
         cd build
         echo -e "Configuring $BINUTILS..."
@@ -196,31 +242,7 @@ toolchain_install()
     fi
 
     if $BUILD_GCC; then
-        rm -rf $GCC
-        mkdir $GCC
-        echo -e "Extracting $GCC..."
-        $EXTR $GCC.tar.gz | tar xfz - >> $LOGFILE 2>&1 || fail_with_info
-
-        if [ "$VMX_MODE" == "vmx128" ]; then
-            cat $GCC.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
-            if [ -f $GCC-vmx128.diff ]; then
-                echo -e "Applying vmx128 support..."
-                cat $GCC-vmx128.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
-            else
-                echo -e "No vmx128 diff found for gcc version $GCC_VER."
-                exit 1
-            fi
-        elif [ "$VMX_MODE" == "xenon-target" ]; then
-            if [ -f $GCC-xenon.diff ]; then
-                echo -e "Applying xenon target patches..."
-                patch --batch -p1 -d $GCC < $GCC-xenon.diff >> $LOGFILE 2>&1 || fail_with_info
-            else
-                echo -e "No xenon target patch found for gcc version $GCC_VER."
-                exit 1
-            fi
-        else
-            cat $GCC.diff | patch -p0 >> $LOGFILE 2>&1 || fail_with_info
-        fi
+        prepare_gcc_src
 
         rm -rf $NEWLIB
         mkdir -p $NEWLIB
@@ -233,18 +255,21 @@ toolchain_install()
         mkdir -p "$PREFIX/$TARGET/include" "$PREFIX/$TARGET/sys-include" || fail_with_info
         cp -r $NEWLIB/newlib/libc/include/* "$PREFIX/$TARGET/include/" || fail_with_info
 
+        local gcc_cfg=(--target=$TARGET --prefix="$PREFIX" --with-cpu=$GCC_CPU --with-newlib
+            --enable-languages=c,c++ --disable-threads --disable-shared --disable-decimal-float
+            --disable-libquadmath --disable-libssp --disable-libsanitizer --disable-nls
+            --disable-linux-futex --disable-libatomic --disable-libgomp --disable-libitm
+            --disable-libstdcxx-time --disable-initfini-array)
+        if [ "$VARIANT" != "xenon" ]; then
+            # options kept from the older patch sets (some are no-ops on newer gcc)
+            gcc_cfg+=(--with-libiconv-prefix=/opt/local --with-gmp=/opt/local --with-mpfr=/opt/local
+                --enable-cxx-flags="-G0" --enable-altivec --disable-libmudflap)
+        fi
+
         cd build-gcc
         echo -e "Configuring $GCC..."
         unset LIBRARY_PATH
-        ../$GCC/configure --target=$TARGET --prefix="$PREFIX" \
-        --with-libiconv-prefix=/opt/local --with-gmp=/opt/local --with-mpfr=/opt/local \
-        --with-cpu=$GCC_CPU --with-newlib \
-        --enable-languages=c,c++ --enable-cxx-flags="-G0" --enable-altivec \
-        --disable-threads --disable-shared --disable-decimal-float --disable-libquadmath \
-        --disable-libssp --disable-libsanitizer --disable-libmudflap --disable-nls \
-        --disable-linux-futex --disable-libatomic --disable-libgomp --disable-libitm \
-        --disable-libstdcxx-time --disable-initfini-array $GCC_EXTRA_CFG \
-        -v >> $LOGFILE 2>&1 || fail_with_info
+        ../$GCC/configure "${gcc_cfg[@]}" $GCC_EXTRA_CFG -v >> $LOGFILE 2>&1 || fail_with_info
 
         echo -e "Building $GCC (compiler only), this could take a while..."
         make $PARALLEL MAKEINFO=true all-gcc >> $LOGFILE 2>&1 || fail_with_info
@@ -294,6 +319,98 @@ toolchain_install()
     rm -rf build build-gcc build-newlib
 }
 
+# Linux toolchain for the Xenon: powerpc64-xenon-linux-musl, ELFv2, -mcpu=xenon
+# by default, shared libraries and POSIX threads.  Built from the same patched
+# binutils and gcc trees as the bare-metal toolchain, into its own sysroot.
+musl_toolchain_install()
+{
+    toolchain_sources
+    check_priv "$@"
+
+    if [ "$VARIANT" != "xenon" ]; then
+        echo -e "The musl toolchain needs the xenon variant."
+        exit 1
+    fi
+
+    fetch $BINUTILS_DL $BINUTILS.tar.gz
+    fetch $GCC_DL $GCC.tar.gz
+    fetch $MUSL_DL $MUSL.tar.gz
+    fetch $LINUX_DL $LINUX.tar.xz
+
+    # reuse the trees of the bare-metal build when they carry the xenon patches
+    [ -f $BINUTILS/opcodes/ppc-xenon-op4.inc ] || prepare_binutils_src
+    [ -f $GCC/gcc/config/rs6000/xenon64.h ] || prepare_gcc_src
+
+    rm -rf build-musl-binutils build-musl-gcc $MUSL $LINUX
+    mkdir build-musl-binutils build-musl-gcc
+    mkdir -p "$MUSL_SYSROOT/usr" || fail_with_info
+
+    cd build-musl-binutils
+    echo -e "Configuring $BINUTILS for $MUSL_TARGET..."
+    ../$BINUTILS/configure --target=$MUSL_TARGET --prefix="$PREFIX" --with-sysroot="$MUSL_SYSROOT" \
+        --disable-werror --disable-multilib --disable-nls \
+        --enable-default-execstack=no --enable-warn-execstack=no \
+        --enable-warn-rwx-segments=no >> $LOGFILE 2>&1 || fail_with_info
+    echo -e "Building $BINUTILS for $MUSL_TARGET, this could take a while..."
+    make $PARALLEL >> $LOGFILE 2>&1 || fail_with_info
+    echo -e "Installing $BINUTILS for $MUSL_TARGET..."
+    make install >> $LOGFILE 2>&1 || fail_with_info
+    cd ..
+
+    echo -e "Installing $LINUX headers..."
+    $EXTR $LINUX.tar.xz | tar xJf - >> $LOGFILE 2>&1 || fail_with_info
+    make -C $LINUX ARCH=powerpc INSTALL_HDR_PATH="$MUSL_SYSROOT/usr" headers_install >> $LOGFILE 2>&1 || fail_with_info
+    rm -rf $LINUX
+
+    cd build-musl-gcc
+    echo -e "Configuring $GCC for $MUSL_TARGET..."
+    unset LIBRARY_PATH
+    ../$GCC/configure --target=$MUSL_TARGET --prefix="$PREFIX" --with-sysroot="$MUSL_SYSROOT" \
+        --with-cpu=xenon --enable-languages=c,c++ --disable-multilib --disable-nls --disable-werror \
+        --enable-shared --enable-threads=posix --enable-tls --enable-lto \
+        --disable-libsanitizer --disable-libssp --disable-libquadmath --disable-libstdcxx-pch \
+        -v >> $LOGFILE 2>&1 || fail_with_info
+    echo -e "Building $GCC for $MUSL_TARGET (compiler only), this could take a while..."
+    make $PARALLEL MAKEINFO=true all-gcc >> $LOGFILE 2>&1 || fail_with_info
+    make MAKEINFO=true install-gcc >> $LOGFILE 2>&1 || fail_with_info
+    cd ..
+
+    echo -e "Extracting $MUSL..."
+    $EXTR $MUSL.tar.gz | tar xfz - >> $LOGFILE 2>&1 || fail_with_info
+    cd $MUSL
+    echo -e "Configuring $MUSL..."
+    ./configure --target=$MUSL_TARGET --prefix=/usr --syslibdir=/lib \
+        CROSS_COMPILE=$MUSL_TARGET- CC=$MUSL_TARGET-gcc LIBCC=" " >> $LOGFILE 2>&1 || fail_with_info
+    make DESTDIR="$MUSL_SYSROOT" install-headers >> $LOGFILE 2>&1 || fail_with_info
+    cd ..
+
+    # static libgcc only, enough to build musl; the full build below adds libgcc_s
+    cd build-musl-gcc
+    echo -e "Building libgcc for $MUSL_TARGET..."
+    make $PARALLEL MAKEINFO=true enable_shared=no all-target-libgcc >> $LOGFILE 2>&1 || fail_with_info
+    make MAKEINFO=true enable_shared=no install-target-libgcc >> $LOGFILE 2>&1 || fail_with_info
+    cd ..
+
+    cd $MUSL
+    echo -e "Building $MUSL..."
+    ./configure --target=$MUSL_TARGET --prefix=/usr --syslibdir=/lib \
+        CROSS_COMPILE=$MUSL_TARGET- CC=$MUSL_TARGET-gcc >> $LOGFILE 2>&1 || fail_with_info
+    make $PARALLEL >> $LOGFILE 2>&1 || fail_with_info
+    echo -e "Installing $MUSL..."
+    make DESTDIR="$MUSL_SYSROOT" install >> $LOGFILE 2>&1 || fail_with_info
+    cd ..
+    rm -rf $MUSL
+
+    cd build-musl-gcc
+    echo -e "Building $GCC target libraries for $MUSL_TARGET, this could take a while..."
+    make $PARALLEL MAKEINFO=true all >> $LOGFILE 2>&1 || fail_with_info
+    echo -e "Installing $GCC for $MUSL_TARGET..."
+    make MAKEINFO=true install >> $LOGFILE 2>&1 || fail_with_info
+    cd ..
+    rm -rf build-musl-binutils build-musl-gcc
+    echo -e "Done"
+}
+
 zlib_install()
 {
     check_priv "$@"
@@ -310,7 +427,7 @@ zlib_install()
 
     export TARGET_SAVE=$TARGET
     export CC=$TARGET-gcc
-    export CFLAGS="-mcpu=$GCC_CPU -mtune=$GCC_CPU -m32 -fno-pic -mpowerpc64 -Wno-error -L$DEVKITXENON/xenon/lib/32/ -T$DEVKITXENON/app.lds -u read -u _start -u exc_base -L$DEVKITXENON/usr/lib -I$DEVKITXENON/usr/include"
+    export CFLAGS="$LIB_CFLAGS -Wno-error -L$DEVKITXENON/xenon/lib/32/ -T$DEVKITXENON/app.lds -u read -u _start -u exc_base -L$DEVKITXENON/usr/lib -I$DEVKITXENON/usr/include"
     export LDFLAGS="${CFLAGS//-T$DEVKITXENON\/app.lds/} -lxenon" # avoid duplicate -T
     export TARGET=`gcc -v 2>&1 | sed -n '2p' | awk '{print $2}'`
 
@@ -349,7 +466,7 @@ libpng_install()
     cd $LIBPNG
 
     export CC=$TARGET-gcc
-    export CFLAGS="-mcpu=$GCC_CPU -mtune=$GCC_CPU -m32 -fno-pic -mpowerpc64 $DEVKITXENON/usr/lib/libxenon.a -L$DEVKITXENON/xenon/lib/32 -T$DEVKITXENON/app.lds -u read -u _start -u exc_base -L$DEVKITXENON/usr/lib -I$DEVKITXENON/usr/include"
+    export CFLAGS="$LIB_CFLAGS $DEVKITXENON/usr/lib/libxenon.a -L$DEVKITXENON/xenon/lib/32 -T$DEVKITXENON/app.lds -u read -u _start -u exc_base -L$DEVKITXENON/usr/lib -I$DEVKITXENON/usr/include"
     export LDFLAGS="${CFLAGS//-T$DEVKITXENON\/app.lds/}"
     export CPPFLAGS="-I$DEVKITXENON/usr/include" # pnglibconf generation only sees CPPFLAGS
 
@@ -393,7 +510,7 @@ bzip2_install()
     cd $BZIP2
 
     echo -e "Building $BZIP2..."
-    make $PARALLEL >> $LOGFILE 2>&1 || fail_with_info
+    make $PARALLEL "${BZIP2_MAKE[@]}" >> $LOGFILE 2>&1 || fail_with_info
     echo -e "Installing $BZIP2..."
     make install PREFIX=$DEVKITXENON/usr >> $LOGFILE 2>&1 || fail_with_info
     cd ..
@@ -416,7 +533,7 @@ freetype_install()
     cd $FREETYPE
 
     export CC=$TARGET-gcc
-    export CFLAGS="-mcpu=$GCC_CPU -mtune=$GCC_CPU -m32 -fno-pic -mpowerpc64 $DEVKITXENON/usr/lib/libxenon.a -L$DEVKITXENON/xenon/lib/32/ -T$DEVKITXENON/app.lds -u read -u _start -u exc_base -L$DEVKITXENON/usr/lib -I$DEVKITXENON/usr/include"
+    export CFLAGS="$LIB_CFLAGS $DEVKITXENON/usr/lib/libxenon.a -L$DEVKITXENON/xenon/lib/32/ -T$DEVKITXENON/app.lds -u read -u _start -u exc_base -L$DEVKITXENON/usr/lib -I$DEVKITXENON/usr/include"
     export LDFLAGS="${CFLAGS//-T$DEVKITXENON\/app.lds/}"
 
     echo -e "Configuring $FREETYPE..."
@@ -469,7 +586,7 @@ filesystems_install()
             cd ..
         fi
         echo -e -n "Building... "
-        make -C $i >> $LOGFILE 2>&1 || fail_with_info
+        make -C $i "${FS_MAKE[@]}" >> $LOGFILE 2>&1 || fail_with_info
         echo -e -n "Installing... "
         make -C $i install >> $LOGFILE 2>&1 || fail_with_info
         echo -e "Done"
@@ -499,7 +616,7 @@ cube()
 
     if [ $RETVAL -eq 1 ]; then
         echo -e "Building Cube Sample..."
-        make -C ../devkitxenon/examples/xenon/graphics/cube >> $LOGFILE 2>&1
+        make -C ../devkitxenon/examples/xenon/graphics/cube "${FS_MAKE[@]}" >> $LOGFILE 2>&1
         cp ../devkitxenon/examples/xenon/graphics/cube/cube.elf32 .
         echo
         echo -e "cube.elf32 compiled, run it via xell"
@@ -521,6 +638,9 @@ all_done()
 
     echo
     echo -e "All done, your xenon toolchain is located here : \"$PREFIX"\"
+    if [ -x "$PREFIX/bin/$MUSL_TARGET-gcc" ]; then
+        echo -e "The Linux (musl) toolchain is $MUSL_TARGET-gcc, its sysroot is \"$MUSL_SYSROOT\""
+    fi
     echo
     echo -e "${RED}Please add the following path to your login script (~/.bashrc) if you'd like every shell to have access by default:"
     echo
@@ -534,11 +654,111 @@ all_done()
 # start
 rm -f $LOGFILE
 
-# Lib-only runs: target the CPU the installed compiler was configured for
-# (--with-cpu), so libxenon and the ports match the toolchain.
-if [ "$1" != "all" ] && [ "$1" != "toolchain" ] && [ -x "$PREFIX/bin/$TARGET-gcc" ]; then
-    GCC_CPU=$("$PREFIX/bin/$TARGET-gcc" -v 2>&1 | grep -o -- '--with-cpu=[^ ]*' | cut -d= -f2)
-    GCC_CPU=${GCC_CPU:-cell}
+# After the subcommand: an optional version and an optional variant, in any
+# order, e.g. "all 16.2.0 xenon", "toolchain 6.3.0 vmx128" or "libs xenon".
+VERSION=""
+[ "$1" == "musl" ] && VARIANT="xenon"
+for arg in "${@:2}"; do
+    case "$arg" in
+        xenon | vmx128)
+            VARIANT=$arg
+            ;;
+        [0-9]*-xenon | [0-9]*-vmx128) # old "16.2.0-xenon" spelling
+            VERSION=${arg%-*}
+            VARIANT=${arg##*-}
+            ;;
+        [0-9]*)
+            VERSION=$arg
+            ;;
+        *)
+            echo -e "Unknown argument \"$arg\", run $0 without arguments for usage."
+            exit 1
+            ;;
+    esac
+done
+
+# available [version] packs
+case "$VERSION" in
+    16.2.0 | "") # default
+        BINU_VER="2.47"
+        GCC_VER="16.2.0"
+        NEWL_VER="4.6.0.20260123"
+        ;;
+    9.2.0)
+        BINU_VER="2.32"
+        GCC_VER="9.2.0"
+        NEWL_VER="3.1.0"
+        ;;
+    6.3.0)
+        BINU_VER="2.28"
+        GCC_VER="6.3.0"
+        GCC_EXTRA_CFG="--without-isl" # gcc 6 graphite is incompatible with modern isl
+        export CXXFLAGS="-O2 -g -std=gnu++14 -fpermissive" # gcc 6 sources vs modern host g++
+        NEWL_VER="2.5.0"
+        ;;
+    #4.7.1) Disabled as libxenon does not build
+    #    BINU_VER="2.22"
+    #    GCC_VER="4.7.1"
+    #    export CFLAGS="-O0 -g0 -std=gnu99 -fno-strict-aliasing -fno-delete-null-pointer-checks -fcommon -fgnu89-inline"
+    #    export CFLAGS_FOR_BUILD="-O0 -g0 -std=gnu99 -fno-strict-aliasing -fno-delete-null-pointer-checks -fcommon -fgnu89-inline" # gcc 4.7 vs C23-default host gcc
+    #    NEWL_VER="1.20.0"
+    #    ;;
+    *)
+        echo -e "Unknown version \"$VERSION\", run $0 without arguments for usage."
+        exit 1
+        ;;
+esac
+
+# variants: patch sets on top of a version
+case "$VARIANT" in
+    xenon)
+        # the powerpc64-xenon-elf target: -mcpu=xenon (VMX128) by default,
+        # -m64 with an -m32 multilib, plus the powerpc64-xenon-linux-musl toolchain
+        GCC_CPU="xenon"
+        NEWLIB_EXTRA_CFG=(CFLAGS_FOR_TARGET="-O2 -g -mcpu=xenon" --disable-newlib-supplied-syscalls --enable-newlib-io-c99-formats)
+        GCC_EXTRA_CFG="--with-sysroot=$PREFIX/xenon --with-native-system-header-dir=/include --disable-tls --disable-libstdcxx-pch --enable-lto"
+        PATCHES="binutils-$BINU_VER-xenon.diff gcc-$GCC_VER-xenon.diff newlib-$NEWL_VER-xenon.diff"
+        ;;
+    vmx128)
+        PATCHES="binutils-$BINU_VER-vmx128.diff gcc-$GCC_VER-vmx128.diff"
+        ;;
+esac
+
+if [ "$1" == "all" ] || [ "$1" == "toolchain" ] || [ "$1" == "musl" ]; then
+    for p in $PATCHES; do
+        if [ ! -f "$p" ]; then
+            echo -e "The $VARIANT variant is not available for ${VERSION:-16.2.0}: $p is missing."
+            exit 1
+        fi
+    done
+fi
+
+case "$1" in
+    libs | libxenon | zlib | libpng | bzip2 | freetype | filesystems | bin2s | cube)
+        if [ "$VARIANT" == "xenon" ]; then
+            if ! "$PREFIX/bin/$TARGET-gcc" -mcpu=xenon -E -x c /dev/null > /dev/null 2>&1; then
+                echo -e "$PREFIX/bin/$TARGET-gcc does not support -mcpu=xenon, build it first with: $0 toolchain 16.2.0 xenon"
+                exit 1
+            fi
+        elif [ -x "$PREFIX/bin/$TARGET-gcc" ]; then
+            # target the CPU the installed compiler was configured for
+            # (--with-cpu), so libxenon and the ports match the toolchain
+            GCC_CPU=$("$PREFIX/bin/$TARGET-gcc" -v 2>&1 | grep -o -- '--with-cpu=[^ ]*' | cut -d= -f2)
+            GCC_CPU=${GCC_CPU:-cell}
+        fi
+        ;;
+esac
+
+# flags for libxenon-linked code (-m32, the libxenon ABI)
+LIB_CFLAGS="-mcpu=$GCC_CPU -mtune=$GCC_CPU -m32 -fno-pic -mpowerpc64 -O2"
+BZIP2_MAKE=()
+FS_MAKE=()
+if [ "$GCC_CPU" == "xenon" ]; then
+    # -mcpu=xenon brings AltiVec and the VMX128 registers; the makefiles of
+    # bzip2, the filesystems and the samples take their CPU flags from MACHDEP
+    LIB_CFLAGS="$LIB_CFLAGS -ffunction-sections -fdata-sections"
+    BZIP2_MAKE=(MACHDEP="-DXENON -m32 -mno-altivec -fno-pic -mpowerpc64 -mhard-float -mcpu=xenon -mtune=xenon")
+    FS_MAKE=(MACHDEP="-DXENON -m32 -maltivec -fno-pic -mpowerpc64 -mhard-float -mcpu=xenon -mtune=xenon -L$DEVKITXENON/xenon/lib/32")
 fi
 
 if [ "$1" == "all" ] || [ "$1" == "toolchain" ]; then
@@ -547,7 +767,7 @@ if [ "$1" == "all" ] || [ "$1" == "toolchain" ]; then
     # Debian / Ubuntu etc
     elif command -v apt &> /dev/null; then
         echo "Info: apt has been detected. Root privileges are required to install dependencies."
-        pkgs="build-essential flex bison libgmp-dev libmpfr-dev libmpc-dev texinfo git wget"
+        pkgs="build-essential flex bison libgmp-dev libmpfr-dev libmpc-dev texinfo git wget rsync xz-utils"
         if [ "$(uname -m)" = "x86_64" ]; then
             pkgs="$pkgs gcc-multilib"
         fi
@@ -558,7 +778,7 @@ if [ "$1" == "all" ] || [ "$1" == "toolchain" ]; then
     # Fedora
     elif command -v dnf &> /dev/null; then
         echo "Info: dnf has been detected. Root privileges are required to install dependencies."
-        sudo dnf -y install gcc g++ flex bison glibc-devel.i686 libstdc++-devel.i686 gmp-devel mpfr-devel libmpc-devel texinfo git wget || {
+        sudo dnf -y install gcc g++ flex bison glibc-devel.i686 libstdc++-devel.i686 gmp-devel mpfr-devel libmpc-devel texinfo git wget rsync xz || {
             echo "Failed to install required packages!"
             exit 1
         }
@@ -575,7 +795,7 @@ if [ "$1" == "all" ] || [ "$1" == "toolchain" ]; then
                 if [ "$(uname -m)" != "x86_64" ]; then
                     echo "Info: a package manager was not detected. Ensure that the required dependencies have been installed."
                 fi
-                sudo pacman -S --needed --noconfirm gcc gcc-multilib flex bison lib32-glibc gmp mpfr libmpc texinfo git wget || {
+                sudo pacman -S --needed --noconfirm gcc gcc-multilib flex bison lib32-glibc gmp mpfr libmpc texinfo git wget rsync xz || {
                     echo "Failed to install required packages!"
                     exit 1
                 }
@@ -587,56 +807,6 @@ if [ "$1" == "all" ] || [ "$1" == "toolchain" ]; then
     else
         echo "Info: a package manager was not detected. Ensure that the required dependencies have been installed."
     fi
-
-    # available [version] packs
-    case "$2" in
-        16.2.0-xenon*)
-            BINU_VER="2.47"
-            GCC_VER="16.2.0"
-            NEWL_VER="4.6.0.20260123"
-            VMX_MODE="xenon-target"
-            GCC_CPU="xenon"
-            NEWLIB_EXTRA_CFG=(CFLAGS_FOR_TARGET="-O2 -g -mcpu=xenon" --disable-newlib-supplied-syscalls --enable-newlib-io-c99-formats)
-            GCC_EXTRA_CFG="--with-sysroot=$PREFIX/xenon --with-native-system-header-dir=/include --disable-tls --disable-libstdcxx-pch"
-            ;;
-        16.2.0*)
-            BINU_VER="2.47"
-            GCC_VER="16.2.0"
-            NEWL_VER="4.6.0.20260123"
-            ;;
-        9.2.0*)
-            BINU_VER="2.32"
-            GCC_VER="9.2.0"
-            NEWL_VER="3.1.0"
-            ;;
-        6.3.0-vmx128*)
-            BINU_VER="2.28"
-            GCC_VER="6.3.0"
-            GCC_EXTRA_CFG="--without-isl"
-            export CXXFLAGS="-O2 -g -std=gnu++14 -fpermissive"
-            NEWL_VER="2.5.0"
-            VMX_MODE="vmx128"
-            ;;
-        6.3.0*)
-            BINU_VER="2.28"
-            GCC_VER="6.3.0"
-            GCC_EXTRA_CFG="--without-isl" # gcc 6 graphite is incompatible with modern isl
-            export CXXFLAGS="-O2 -g -std=gnu++14 -fpermissive" # gcc 6 sources vs modern host g++
-            NEWL_VER="2.5.0"
-            ;;
-        #4.7.1*) Disabled as libxenon does not build
-        #    BINU_VER="2.22"
-        #    GCC_VER="4.7.1"
-        #    export CFLAGS="-O0 -g0 -std=gnu99 -fno-strict-aliasing -fno-delete-null-pointer-checks -fcommon -fgnu89-inline"
-        #    export CFLAGS_FOR_BUILD="-O0 -g0 -std=gnu99 -fno-strict-aliasing -fno-delete-null-pointer-checks -fcommon -fgnu89-inline" # gcc 4.7 vs C23-default host gcc
-        #    NEWL_VER="1.20.0"
-        #    ;;
-        *) # default
-            BINU_VER="2.47"
-            GCC_VER="16.2.0"
-            NEWL_VER="4.6.0.20260123"
-            ;;
-    esac
 
     toolchain_install "$0" "$@"
 
@@ -650,6 +820,10 @@ if [ "$1" == "all" ] || [ "$1" == "toolchain" ]; then
         filesystems_install "$0" "$@"
     fi
 
+    if [ "$VARIANT" == "xenon" ] && $BUILD_MUSL; then
+        musl_toolchain_install "$0" "$@"
+    fi
+
     all_done
 elif [ "$1" == "libs" ]; then
     # libxenon provides app.lds and libxenon.a, needed to link-test the libs below
@@ -660,6 +834,9 @@ elif [ "$1" == "libs" ]; then
     freetype_install "$0" "$@"
     bin2s_install "$0" "$@"
     filesystems_install "$0" "$@"
+elif [ "$1" == "musl" ]; then
+    musl_toolchain_install "$0" "$@"
+    all_done
 elif [ "$1" == "libxenon" ]; then
     libxenon_install "$0" "$@"
 elif [ "$1" == "zlib" ]; then
@@ -685,7 +862,8 @@ elif [ "$1" == "clean" ]; then
     rm -rf $LIBPNG $LIBPNG.tar.xz
     rm -rf $BZIP2 $BZIP2.tar.gz
     rm -rf $FREETYPE $FREETYPE.tar.gz
-    rm -rf build build-gcc build-newlib
+    rm -rf musl-*.tar.gz linux-*.tar.xz $MUSL $LINUX
+    rm -rf build build-gcc build-newlib build-musl-binutils build-musl-gcc
     rm -rf libext2fs
     rm -rf libfat
     rm -rf libxtaf
@@ -698,29 +876,36 @@ elif [ "$1" == "env-cmd" ]; then
     echo "Run the xenon-env command to add libxenon to your curent shell PATH."
 else
     echo -e "Usage:"
-    echo -e "$0 <subcommand>"
+    echo -e "$0 <subcommand> [version] [variant]"
     echo
     echo -e "Subcommands:"
-    echo -e "\"all\"       [version] - (toolchain, libs, and filesystems)"
-    echo -e "\"toolchain\" [version] - (install toolchain)"
-    echo -e "\"libs\"                - (install libxenon + bin2s + libraries seen below)"
-    echo -e "\"libxenon\"            - (install or update libxenon)"
-    echo -e "\"zlib\"                - (install or update zlib)"
-    echo -e "\"libpng\"              - (install or update libpng)"
-    echo -e "\"bzip2\"               - (install or update bzip2)"
-    echo -e "\"freetype\"            - (install or update freetype)"
-    echo -e "\"filesystems\"         - (install libxenon filesystems)"
-    echo -e "\"cube\"                - (compile the cube sample)"
+    echo -e "\"all\"       [version] [variant] - (toolchain, libs, and filesystems)"
+    echo -e "\"toolchain\" [version] [variant] - (install toolchain)"
+    echo -e "\"musl\"      [version]           - (install the $MUSL_TARGET toolchain)"
+    echo -e "\"libs\"                [variant] - (install libxenon + bin2s + libraries seen below)"
+    echo -e "\"libxenon\"            [variant] - (install or update libxenon)"
+    echo -e "\"zlib\"                [variant] - (install or update zlib)"
+    echo -e "\"libpng\"              [variant] - (install or update libpng)"
+    echo -e "\"bzip2\"               [variant] - (install or update bzip2)"
+    echo -e "\"freetype\"            [variant] - (install or update freetype)"
+    echo -e "\"filesystems\"         [variant] - (install libxenon filesystems)"
+    echo -e "\"cube\"                [variant] - (compile the cube sample)"
     echo -e "\"env-cmd\"             - (install a command to set env vars named xenon-env to /usr/local/bin)"
     echo -e "\"clean\"               - (delete all downloaded files)"
     echo
     echo -e "Versions:"
     echo -e "16.2.0 (Default)"
-    echo -e "16.2.0-xenon"
     echo -e "9.2.0"
-    echo -e "6.3.0-vmx128"
     echo -e "6.3.0"
     # echo -e "4.7.1"
+    echo
+    echo -e "Variants:"
+    echo -e "xenon  - powerpc64-xenon-elf target with -mcpu=xenon and VMX128, plus the"
+    echo -e "         $MUSL_TARGET toolchain (skip it with BUILD_MUSL=false);"
+    echo -e "         for libs, builds them for -mcpu=xenon (16.2.0)"
+    echo -e "vmx128 - VMX128 assembler support (needs binutils-<ver>-vmx128.diff and gcc-<ver>-vmx128.diff)"
+    echo
+    echo -e "Example: $0 all 16.2.0 xenon"
     echo
     echo -e "Set install location with the PREFIX env"
     echo
