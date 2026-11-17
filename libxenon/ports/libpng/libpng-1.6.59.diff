@@ -1,0 +1,15 @@
+--- libpng-1.6.59/pngconf.h	2026-10-28 15:53:52.644035900 +0000
++++ libpng-1.6.59/pngconf.h	2026-10-28 15:53:52.677473630 +0000
+@@ -55,6 +55,12 @@
+ #  include <time.h>
+ #endif
+ 
++/* libpng 1.5 source compatibility */
++#include <string.h>
++#ifndef png_sizeof
++#  define png_sizeof(x) (sizeof (x))
++#endif
++
+ #endif /* PNG_BUILDING_SYMBOL_TABLE */
+ 
+ /* Prior to 1.6.0, it was possible to turn off 'const' in declarations,
